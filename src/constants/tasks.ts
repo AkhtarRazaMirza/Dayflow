@@ -12,6 +12,9 @@ export type Task = {
   time: string;
   status: TaskStatus;
   icon: TaskIcon;
+  date?: string;
+  deadline?: string;
+  createdAt?: number;
 };
 
 export const TASKS: Task[] = [
@@ -20,6 +23,7 @@ export const TASKS: Task[] = [
     category: "Grocery shopping app design",
     title: "Market Research",
     time: "10:00 AM",
+    deadline: "10:00 AM",
     status: "Done",
     icon: { name: "grid", backgroundColor: "#FF6B8A" },
   },
@@ -28,6 +32,7 @@ export const TASKS: Task[] = [
     category: "Grocery shopping app design",
     title: "Competitive Analysis",
     time: "12:00 PM",
+    deadline: "12:00 PM",
     status: "In Progress",
     icon: { name: "grid", backgroundColor: "#FF6B8A" },
   },
@@ -36,6 +41,7 @@ export const TASKS: Task[] = [
     category: "Uber Eats redesign challenge",
     title: "Create Low-fidelity Wireframe",
     time: "07:00 PM",
+    deadline: "07:00 PM",
     status: "To-do",
     icon: { name: "arrow-down-circle", backgroundColor: "#4ADE80" },
   },
@@ -44,6 +50,7 @@ export const TASKS: Task[] = [
     category: "About design sprint",
     title: "How to pitch a Design Sprint",
     time: "09:00 PM",
+    deadline: "09:00 PM",
     status: "To-do",
     icon: { name: "bookmark", backgroundColor: "#FBBF24" },
   },
