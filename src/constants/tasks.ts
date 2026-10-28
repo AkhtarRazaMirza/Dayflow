@@ -1,5 +1,7 @@
 export type TaskStatus = "Done" | "In Progress" | "To-do";
 
+export type TaskPriority = "High" | "Medium" | "Low";
+
 export type TaskIcon = {
   name: string;
   backgroundColor: string;
@@ -15,6 +17,8 @@ export type Task = {
   date?: string;
   deadline?: string;
   createdAt?: number;
+  priority?: TaskPriority;
+  notes?: string;
 };
 
 export const TASKS: Task[] = [
@@ -25,6 +29,7 @@ export const TASKS: Task[] = [
     time: "10:00 AM",
     deadline: "10:00 AM",
     status: "Done",
+    priority: "High",
     icon: { name: "grid", backgroundColor: "#FF6B8A" },
   },
   {
@@ -34,6 +39,7 @@ export const TASKS: Task[] = [
     time: "12:00 PM",
     deadline: "12:00 PM",
     status: "In Progress",
+    priority: "High",
     icon: { name: "grid", backgroundColor: "#FF6B8A" },
   },
   {
@@ -43,6 +49,7 @@ export const TASKS: Task[] = [
     time: "07:00 PM",
     deadline: "07:00 PM",
     status: "To-do",
+    priority: "Medium",
     icon: { name: "arrow-down-circle", backgroundColor: "#4ADE80" },
   },
   {
@@ -52,6 +59,7 @@ export const TASKS: Task[] = [
     time: "09:00 PM",
     deadline: "09:00 PM",
     status: "To-do",
+    priority: "Low",
     icon: { name: "bookmark", backgroundColor: "#FBBF24" },
   },
 ];
