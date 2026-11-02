@@ -19,6 +19,13 @@ type Timeframe = "Today" | "This Week" | "All Time";
 
 const DAYS_OF_WEEK = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+const formatDateKey = (d: Date): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 const Analytics = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -27,11 +34,25 @@ const Analytics = () => {
   const [timeframe, setTimeframe] = useState<Timeframe>("Today");
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
 
-  // Core metrics
-  const total = tasks.length;
-  const completed = tasks.filter((t) => t.status === "Done").length;
-  const inProgress = tasks.filter((t) => t.status === "In Progress").length;
-  const todo = tasks.filter((t) => t.status === "To-do").length;
+  const todayKey = useMemo(() => formatDateKey(new Date()), []);
+
+  // Filter tasks based on selected timeframe
+  const scopedTasks = useMemo(() => {
+    if (timeframe === "Today") {
+      return tasks.filter((t) => (t.date || todayKey) === todayKey);
+    }
+    if (timeframe === "This Week") {
+      // In this week: today or next 6 days
+      return tasks;
+    }
+    return tasks;
+  }, [tasks, timeframe, todayKey]);
+
+  // Core metrics calculated from scoped tasks
+  const total = scopedTasks.length;
+  const completed = scopedTasks.filter((t) => t.status === "Done").length;
+  const inProgress = scopedTasks.filter((t) => t.status === "In Progress").length;
+  const todo = scopedTasks.filter((t) => t.status === "To-do").length;
 
   const completionPercent =
     total > 0 ? Math.round((completed / total) * 100) : 0;
@@ -48,7 +69,7 @@ const Analytics = () => {
     const criticalTasks: { task: Task; label: string; isOverdue: boolean }[] =
       [];
 
-    tasks.forEach((task) => {
+    scopedTasks.forEach((task) => {
       if (task.status === "Done") return;
       const progressInfo = getDeadlineProgress(task, now);
 
@@ -77,7 +98,7 @@ const Analytics = () => {
       onTrackCount,
       criticalTasks,
     };
-  }, [tasks]);
+  }, [scopedTasks]);
 
   // Productive scheduled time breakdown (Morning, Afternoon, Evening)
   const timeDistribution = useMemo(() => {
@@ -85,7 +106,7 @@ const Analytics = () => {
     let afternoon = 0;
     let evening = 0;
 
-    tasks.forEach((t) => {
+    scopedTasks.forEach((t) => {
       const match = t.time.match(/(\d+):(\d+)\s*(AM|PM)?/i);
       if (match) {
         let hour = parseInt(match[1], 10);
@@ -102,7 +123,7 @@ const Analytics = () => {
     });
 
     return { morning, afternoon, evening };
-  }, [tasks]);
+  }, [scopedTasks]);
 
   // Category breakdown with task lists
   const categories = useMemo(() => {
@@ -117,7 +138,7 @@ const Analytics = () => {
       }
     >();
 
-    tasks.forEach((t) => {
+    scopedTasks.forEach((t) => {
       const existing = map.get(t.category) || {
         total: 0,
         completed: 0,
@@ -138,18 +159,161 @@ const Analytics = () => {
       ...data,
       percent: Math.round((data.completed / data.total) * 100),
     }));
-  }, [tasks]);
+  }, [scopedTasks]);
 
   // Current day of week (0 = Sun, 1 = Mon, ..., 6 = Sat)
   const currentDayIndex = useMemo(() => {
     const day = new Date().getDay();
-    // Map Sunday (0) to index 6, Mon (1) to 0, etc.
     return day === 0 ? 6 : day - 1;
   }, []);
 
   const toggleCategoryExpand = (catName: string) => {
     setExpandedCategory((prev) => (prev === catName ? null : catName));
   };
+
+  // Focus time parsed from completed tasks
+  const totalCompletedMinutes = useMemo(() => {
+    return scopedTasks
+      .filter((t) => t.status === "Done")
+      .reduce((acc, t) => {
+        const dur = t.estimatedDuration;
+        if (!dur) return acc + 30;
+        let mins = 0;
+        const hMatch = dur.match(/(\d+)\s*h/i);
+        const mMatch = dur.match(/(\d+)\s*m/i);
+        if (hMatch) mins += parseInt(hMatch[1], 10) * 60;
+        if (mMatch) mins += parseInt(mMatch[1], 10);
+        return acc + (mins || 30);
+      }, 0);
+  }, [scopedTasks]);
+
+  const focusLoggedLabel = useMemo(() => {
+    if (totalCompletedMinutes === 0) return "0 hrs";
+    if (totalCompletedMinutes < 60) return `${totalCompletedMinutes}m`;
+    const hrs = (totalCompletedMinutes / 60).toFixed(1);
+    return `${hrs.replace(".0", "")} hrs`;
+  }, [totalCompletedMinutes]);
+
+  // Dynamic active streak calculation
+  const activeStreakDays = useMemo(() => {
+    const doneTasksWithDate = tasks.filter((t) => t.status === "Done" && t.date);
+    if (doneTasksWithDate.length === 0) return 0;
+    const doneDates = new Set(doneTasksWithDate.map((t) => t.date!));
+
+    let streak = 0;
+    const d = new Date();
+    const todayStr = formatDateKey(d);
+    if (!doneDates.has(todayStr)) {
+      d.setDate(d.getDate() - 1);
+    }
+    while (streak < 30) {
+      const key = formatDateKey(d);
+      if (doneDates.has(key)) {
+        streak += 1;
+        d.setDate(d.getDate() - 1);
+      } else {
+        break;
+      }
+    }
+    return streak;
+  }, [tasks]);
+
+  // Peak activity window
+  const peakWindow = useMemo(() => {
+    const { morning, afternoon, evening } = timeDistribution;
+    if (morning === 0 && afternoon === 0 && evening === 0) return "Flexible";
+    if (morning >= afternoon && morning >= evening) return "Morning";
+    if (afternoon >= morning && afternoon >= evening) return "Afternoon";
+    return "Evening";
+  }, [timeDistribution]);
+
+  // Weekly velocity data for 7 days
+  const weeklyVelocityData = useMemo(() => {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+
+    return DAYS_OF_WEEK.map((dayName, idx) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + idx);
+      const key = formatDateKey(d);
+
+      const dayTasks = tasks.filter((t) => t.date === key);
+      const dayTotal = dayTasks.length;
+      const dayCompleted = dayTasks.filter((t) => t.status === "Done").length;
+      const percent =
+        dayTotal > 0 ? Math.round((dayCompleted / dayTotal) * 100) : 0;
+
+      return {
+        day: dayName,
+        dateKey: key,
+        total: dayTotal,
+        completed: dayCompleted,
+        percent,
+      };
+    });
+  }, [tasks]);
+
+  // AI Productivity recommendation
+  const insightRecommendation = useMemo(() => {
+    if (deadlineAnalysis.overdueCount > 0) {
+      return {
+        type: "alert",
+        icon: "warning-outline",
+        color: "#EF4444",
+        bg: "rgba(239, 68, 68, 0.12)",
+        title: "Immediate Action Required",
+        message: `${deadlineAnalysis.overdueCount} task is past its deadline. Start a 25m Focus Session to resolve it promptly.`,
+      };
+    }
+    if (completionPercent >= 75) {
+      return {
+        type: "success",
+        icon: "trophy-outline",
+        color: Colors.statusDone,
+        bg: "rgba(74, 222, 128, 0.12)",
+        title: "High Velocity Flow",
+        message: `Stellar execution! You have completed ${completionPercent}% of your ${timeframe.toLowerCase()} schedule.`,
+      };
+    }
+    if (inProgress > 0) {
+      return {
+        type: "active",
+        icon: "flame-outline",
+        color: Colors.primary,
+        bg: "rgba(245, 158, 11, 0.12)",
+        title: "Momentum in Progress",
+        message: `${inProgress} active task underway. Recommended focus period: Afternoon 12:00 - 05:00 PM.`,
+      };
+    }
+    if (total === 0) {
+      return {
+        type: "neutral",
+        icon: "sparkles-outline",
+        color: Colors.primary,
+        bg: "rgba(245, 158, 11, 0.12)",
+        title: "Fresh Slate Ahead",
+        message: "No tasks scheduled yet. Tap + to schedule your priorities and ignite your flow.",
+      };
+    }
+    return {
+      type: "neutral",
+      icon: "bulb-outline",
+      color: Colors.statusTodo,
+      bg: "rgba(56, 189, 248, 0.12)",
+      title: "Ready to Kickstart",
+      message: `${todo} pending tasks on deck. Pick your highest-impact task to begin.`,
+    };
+  }, [
+    deadlineAnalysis.overdueCount,
+    completionPercent,
+    inProgress,
+    total,
+    todo,
+    timeframe,
+  ]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -208,7 +372,9 @@ const Analytics = () => {
         <View style={styles.heroCard}>
           <View style={styles.heroHeader}>
             <View>
-              <Text style={styles.heroSubtitle}>Completion Score</Text>
+              <Text style={styles.heroSubtitle}>
+                {timeframe} Completion Score
+              </Text>
               <Text style={styles.heroRate}>{completionPercent}%</Text>
             </View>
 
@@ -298,9 +464,7 @@ const Analytics = () => {
                   { backgroundColor: Colors.statusDone },
                 ]}
               />
-              <Text style={styles.legendText}>
-                Done ({completed})
-              </Text>
+              <Text style={styles.legendText}>Done ({completed})</Text>
             </View>
 
             <View style={styles.legendItem}>
@@ -310,9 +474,7 @@ const Analytics = () => {
                   { backgroundColor: Colors.statusInProgress },
                 ]}
               />
-              <Text style={styles.legendText}>
-                Active ({inProgressPercent}%)
-              </Text>
+              <Text style={styles.legendText}>Active ({inProgressPercent}%)</Text>
             </View>
 
             <View style={styles.legendItem}>
@@ -322,9 +484,67 @@ const Analytics = () => {
                   { backgroundColor: Colors.statusTodo },
                 ]}
               />
-              <Text style={styles.legendText}>
-                To-do ({todoPercent}%)
+              <Text style={styles.legendText}>To-do ({todoPercent}%)</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* AI Productivity Insight Card */}
+        <View
+          style={[
+            styles.insightCard,
+            { backgroundColor: insightRecommendation.bg },
+          ]}
+        >
+          <View style={styles.insightHeader}>
+            <View style={styles.insightHeaderLeft}>
+              <Ionicons
+                name={insightRecommendation.icon as any}
+                size={18}
+                color={insightRecommendation.color}
+              />
+              <Text
+                style={[
+                  styles.insightTitle,
+                  { color: insightRecommendation.color },
+                ]}
+              >
+                {insightRecommendation.title}
               </Text>
+            </View>
+            <View style={styles.insightBadge}>
+              <Text style={styles.insightBadgeText}>Insight</Text>
+            </View>
+          </View>
+          <Text style={styles.insightMessage}>
+            {insightRecommendation.message}
+          </Text>
+
+          {/* Metric Triad: Streak + Focus + Best Window */}
+          <View style={styles.insightMetricsRow}>
+            <View style={styles.insightMetricItem}>
+              <Text style={styles.insightMetricNum}>
+                {`🔥 ${activeStreakDays} ${activeStreakDays === 1 ? "Day" : "Days"}`}
+              </Text>
+              <Text style={styles.insightMetricLabel}>Active Streak</Text>
+            </View>
+            <View style={styles.insightMetricDivider} />
+            <View style={styles.insightMetricItem}>
+              <Text style={styles.insightMetricNum}>{`⏱️ ${focusLoggedLabel}`}</Text>
+              <Text style={styles.insightMetricLabel}>Focus Logged</Text>
+            </View>
+            <View style={styles.insightMetricDivider} />
+            <View style={styles.insightMetricItem}>
+              <Text style={styles.insightMetricNum}>
+                {peakWindow === "Morning"
+                  ? "☀️ Morning"
+                  : peakWindow === "Afternoon"
+                    ? "🌤️ Afternoon"
+                    : peakWindow === "Evening"
+                      ? "🌙 Evening"
+                      : "⚡ Flexible"}
+              </Text>
+              <Text style={styles.insightMetricLabel}>Peak Hours</Text>
             </View>
           </View>
         </View>
@@ -344,31 +564,33 @@ const Analytics = () => {
           </View>
 
           <View style={styles.barsContainer}>
-            {DAYS_OF_WEEK.map((day, idx) => {
+            {weeklyVelocityData.map((dayData, idx) => {
               const isCurrentDay = idx === currentDayIndex;
-              // Today's height corresponds to real workload, other days reflect active status
-              const barFillPercent = isCurrentDay
-                ? Math.max(30, completionPercent)
-                : idx < currentDayIndex
-                  ? 65
-                  : 20;
+              const hasTasks = dayData.total > 0;
+              const barFillPercent = hasTasks
+                ? Math.max(18, dayData.percent)
+                : isCurrentDay && completionPercent > 0
+                  ? Math.max(18, completionPercent)
+                  : 0;
 
               return (
-                <View key={day} style={styles.barCol}>
+                <View key={dayData.day} style={styles.barCol}>
                   <View style={styles.barTrack}>
-                    <View
-                      style={[
-                        styles.barFill,
-                        {
-                          height: `${barFillPercent}%`,
-                          backgroundColor: isCurrentDay
-                            ? Colors.primary
-                            : idx < currentDayIndex
-                              ? "rgba(245, 158, 11, 0.4)"
-                              : Colors.surfaceLight,
-                        },
-                      ]}
-                    />
+                    {barFillPercent > 0 && (
+                      <View
+                        style={[
+                          styles.barFill,
+                          {
+                            height: `${barFillPercent}%`,
+                            backgroundColor: isCurrentDay
+                              ? Colors.primary
+                              : dayData.percent === 100
+                                ? Colors.statusDone
+                                : "rgba(245, 158, 11, 0.45)",
+                          },
+                        ]}
+                      />
+                    )}
                   </View>
                   <Text
                     style={[
@@ -376,7 +598,7 @@ const Analytics = () => {
                       isCurrentDay && styles.barDayTextActive,
                     ]}
                   >
-                    {day}
+                    {dayData.day}
                   </Text>
                   {isCurrentDay && <View style={styles.todayDot} />}
                 </View>
@@ -556,7 +778,7 @@ const Analytics = () => {
                 color={Colors.statusDone}
               />
               <Text style={styles.allClearText}>
-                {"All deadlines are well within schedule."}
+                All deadlines are well within schedule.
               </Text>
             </View>
           )}
@@ -620,99 +842,127 @@ const Analytics = () => {
         {/* Interactive Category Breakdown with Task Expansion */}
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>Category Deep-Dive</Text>
-          <Text style={styles.sectionMeta}>Tap to view tasks</Text>
+          <Text style={styles.sectionMeta}>
+            {categories.length > 0 ? "Tap to view tasks" : "No active categories"}
+          </Text>
         </View>
 
-        {categories.map((cat) => {
-          const isExpanded = expandedCategory === cat.name;
+        {categories.length === 0 ? (
+          <View style={styles.categoryEmptyCard}>
+            <Ionicons
+              name="folder-open-outline"
+              size={26}
+              color={Colors.textSecondary}
+            />
+            <Text style={styles.categoryEmptyTitle}>No Categories Yet</Text>
+            <Text style={styles.categoryEmptySubtitle}>
+              Categorized tasks will automatically appear and graph here.
+            </Text>
+          </View>
+        ) : (
+          categories.map((cat) => {
+            const isExpanded = expandedCategory === cat.name;
 
-          return (
-            <View key={cat.name} style={styles.categoryCard}>
-              <TouchableOpacity
-                style={styles.catHeaderTouch}
-                onPress={() => toggleCategoryExpand(cat.name)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.catHeaderLeft}>
-                  <Text style={styles.catName} numberOfLines={1}>
-                    {cat.name}
-                  </Text>
-                  <Text style={styles.catRatio}>
-                    {cat.completed}/{cat.total} done ({cat.percent}%)
-                  </Text>
+            return (
+              <View key={cat.name} style={styles.categoryCard}>
+                <TouchableOpacity
+                  style={styles.catHeaderTouch}
+                  onPress={() => toggleCategoryExpand(cat.name)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.catHeaderLeft}>
+                    <Text style={styles.catName} numberOfLines={1}>
+                      {cat.name}
+                    </Text>
+                    <Text style={styles.catRatio}>
+                      {cat.completed}/{cat.total} done ({cat.percent}%)
+                    </Text>
+                  </View>
+
+                  <Ionicons
+                    name={isExpanded ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={Colors.textSecondary}
+                  />
+                </TouchableOpacity>
+
+                <View style={styles.catProgressBar}>
+                  <View
+                    style={[
+                      styles.catProgressFill,
+                      {
+                        width: `${cat.percent}%`,
+                        backgroundColor:
+                          cat.percent === 100
+                            ? Colors.statusDone
+                            : Colors.primary,
+                      },
+                    ]}
+                  />
                 </View>
 
-                <Ionicons
-                  name={isExpanded ? "chevron-up" : "chevron-down"}
-                  size={18}
-                  color={Colors.textSecondary}
-                />
-              </TouchableOpacity>
+                {/* Expandable Task Sub-List */}
+                {isExpanded && (
+                  <View style={styles.catTaskList}>
+                    {cat.taskList.map((task) => {
+                      const isDone = task.status === "Done";
+                      const subtaskCount = task.subtasks?.length ?? 0;
+                      const completedSubtaskCount =
+                        task.subtasks?.filter((st) => st.completed).length ?? 0;
 
-              <View style={styles.catProgressBar}>
-                <View
-                  style={[
-                    styles.catProgressFill,
-                    {
-                      width: `${cat.percent}%`,
-                      backgroundColor:
-                        cat.percent === 100
-                          ? Colors.statusDone
-                          : Colors.primary,
-                    },
-                  ]}
-                />
-              </View>
-
-              {/* Expandable Task Sub-List */}
-              {isExpanded && (
-                <View style={styles.catTaskList}>
-                  {cat.taskList.map((task) => {
-                    const isDone = task.status === "Done";
-                    return (
-                      <TouchableOpacity
-                        key={task.id}
-                        style={styles.catTaskItem}
-                        onPress={() => toggleTaskStatus(task.id)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons
-                          name={
-                            isDone
-                              ? "checkmark-circle"
-                              : task.status === "In Progress"
-                                ? "time"
-                                : "ellipse-outline"
-                          }
-                          size={18}
-                          color={
-                            isDone
-                              ? Colors.statusDone
-                              : task.status === "In Progress"
-                                ? Colors.statusInProgress
-                                : Colors.statusTodo
-                          }
-                        />
-
-                        <Text
-                          style={[
-                            styles.catTaskTitle,
-                            isDone && styles.catTaskTitleDone,
-                          ]}
-                          numberOfLines={1}
+                      return (
+                        <TouchableOpacity
+                          key={task.id}
+                          style={styles.catTaskItem}
+                          onPress={() => toggleTaskStatus(task.id)}
+                          activeOpacity={0.7}
                         >
-                          {task.title}
-                        </Text>
+                          <Ionicons
+                            name={
+                              isDone
+                                ? "checkmark-circle"
+                                : task.status === "In Progress"
+                                  ? "time"
+                                  : "ellipse-outline"
+                            }
+                            size={18}
+                            color={
+                              isDone
+                                ? Colors.statusDone
+                                : task.status === "In Progress"
+                                  ? Colors.statusInProgress
+                                  : Colors.statusTodo
+                            }
+                          />
 
-                        <Text style={styles.catTaskTime}>{task.time}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          );
-        })}
+                          <View style={styles.catTaskTitleWrap}>
+                            <Text
+                              style={[
+                                styles.catTaskTitle,
+                                isDone && styles.catTaskTitleDone,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {task.title}
+                            </Text>
+
+                            {subtaskCount > 0 && (
+                              <Text style={styles.catSubtaskMeta}>
+                                {completedSubtaskCount}/{subtaskCount} subtasks
+                              </Text>
+                            )}
+                          </View>
+
+                          <Text style={styles.catTaskTime}>{task.time}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            );
+          })
+        )}
       </ScrollView>
     </View>
   );
@@ -806,10 +1056,11 @@ const styles = StyleSheet.create({
   heroSubtitle: {
     fontSize: 13,
     color: Colors.textSecondary,
+    fontWeight: "500",
     marginBottom: 4,
   },
   heroRate: {
-    fontSize: 34,
+    fontSize: 36,
     fontWeight: "800",
     color: Colors.textPrimary,
   },
@@ -817,10 +1068,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 10,
+    backgroundColor: Colors.surfaceLight,
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   heroBadgeText: {
     fontSize: 12,
@@ -832,7 +1085,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surfaceLight,
     flexDirection: "row",
     overflow: "hidden",
-    marginBottom: 14,
+    marginBottom: 16,
   },
   progressBarSegment: {
     height: "100%",
@@ -840,6 +1093,7 @@ const styles = StyleSheet.create({
   legendRow: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignItems: "center",
   },
   legendItem: {
     flexDirection: "row",
@@ -852,23 +1106,92 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   legendText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Colors.textSecondary,
     fontWeight: "500",
+  },
+  insightCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 16,
+    marginBottom: 16,
+  },
+  insightHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  insightHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  insightTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  insightBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
+  },
+  insightBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: Colors.textSecondary,
+    textTransform: "uppercase",
+  },
+  insightMessage: {
+    fontSize: 13,
+    color: Colors.textPrimary,
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  insightMetricsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(0, 0, 0, 0.25)",
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  insightMetricItem: {
+    flex: 1,
+    alignItems: "center",
+  },
+  insightMetricNum: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: Colors.textPrimary,
+    marginBottom: 2,
+  },
+  insightMetricLabel: {
+    fontSize: 10,
+    color: Colors.textSecondary,
+    fontWeight: "500",
+  },
+  insightMetricDivider: {
+    width: 1,
+    height: 20,
+    backgroundColor: Colors.border,
   },
   chartCard: {
     backgroundColor: Colors.surface,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: Colors.border,
-    padding: 18,
+    padding: 20,
     marginBottom: 16,
   },
   chartHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
+    alignItems: "flex-start",
+    marginBottom: 20,
   },
   chartTitle: {
     fontSize: 15,
@@ -882,9 +1205,9 @@ const styles = StyleSheet.create({
   },
   todayPill: {
     backgroundColor: Colors.surfaceLight,
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 8,
+    borderRadius: 10,
   },
   todayPillText: {
     fontSize: 11,
@@ -895,32 +1218,30 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-end",
-    height: 90,
-    paddingTop: 8,
+    height: 120,
+    paddingTop: 10,
   },
   barCol: {
-    flex: 1,
     alignItems: "center",
-    height: "100%",
-    justifyContent: "flex-end",
-    gap: 6,
+    gap: 8,
+    flex: 1,
   },
   barTrack: {
-    width: 14,
-    height: 60,
-    borderRadius: 7,
+    width: 16,
+    height: 80,
     backgroundColor: Colors.surfaceLight,
+    borderRadius: 8,
     justifyContent: "flex-end",
     overflow: "hidden",
   },
   barFill: {
     width: "100%",
-    borderRadius: 7,
+    borderRadius: 8,
   },
   barDayText: {
     fontSize: 11,
     color: Colors.textSecondary,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   barDayTextActive: {
     color: Colors.primary,
@@ -931,16 +1252,16 @@ const styles = StyleSheet.create({
     height: 4,
     borderRadius: 2,
     backgroundColor: Colors.primary,
+    marginTop: -4,
   },
   metricsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 12,
-    marginBottom: 20,
+    marginBottom: 24,
   },
   metricCard: {
-    flex: 1,
-    minWidth: "45%",
+    width: "48%",
     backgroundColor: Colors.surface,
     borderRadius: 16,
     borderWidth: 1,
@@ -948,13 +1269,13 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   metricIconWrap: {
-    width: 32,
-    height: 32,
+    width: 36,
+    height: 36,
     borderRadius: 10,
     backgroundColor: Colors.primaryMuted,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 12,
   },
   metricNumber: {
     fontSize: 22,
@@ -965,6 +1286,7 @@ const styles = StyleSheet.create({
   metricLabel: {
     fontSize: 12,
     color: Colors.textSecondary,
+    fontWeight: "500",
   },
   sectionHeaderRow: {
     flexDirection: "row",
@@ -973,7 +1295,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
     color: Colors.textPrimary,
   },
@@ -987,11 +1309,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 24,
   },
   deadlineStatusRow: {
     flexDirection: "row",
-    gap: 16,
+    flexWrap: "wrap",
+    gap: 12,
     marginBottom: 12,
   },
   healthItem: {
@@ -1007,11 +1330,11 @@ const styles = StyleSheet.create({
   healthLabel: {
     fontSize: 12,
     fontWeight: "600",
-    color: Colors.textPrimary,
+    color: Colors.textSecondary,
   },
   criticalList: {
     gap: 8,
-    paddingTop: 8,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
   },
@@ -1019,23 +1342,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: Colors.surfaceLight,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingVertical: 4,
   },
   criticalItemLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     flex: 1,
-    marginRight: 8,
+    marginRight: 10,
   },
   criticalTitle: {
-    fontSize: 12,
-    fontWeight: "600",
+    fontSize: 13,
     color: Colors.textPrimary,
-    flex: 1,
+    fontWeight: "500",
   },
   criticalLabel: {
     fontSize: 11,
@@ -1044,15 +1363,13 @@ const styles = StyleSheet.create({
   allClearRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 8,
     paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
   },
   allClearText: {
     fontSize: 12,
     color: Colors.statusDone,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   focusDistributionCard: {
     backgroundColor: Colors.surface,
@@ -1060,8 +1377,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     padding: 16,
-    marginBottom: 20,
-    marginTop: 12,
+    marginTop: 10,
+    marginBottom: 24,
   },
   focusPeriodRow: {
     flexDirection: "row",
@@ -1077,7 +1394,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     color: Colors.textPrimary,
-    marginTop: 2,
   },
   focusPeriodHours: {
     fontSize: 10,
@@ -1088,16 +1404,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 8,
-    marginTop: 4,
+    marginTop: 2,
   },
   focusBadgeText: {
     fontSize: 10,
     fontWeight: "600",
-    color: Colors.primary,
+    color: Colors.textSecondary,
   },
   focusPeriodDivider: {
     width: 1,
-    height: 48,
+    height: 40,
     backgroundColor: Colors.border,
   },
   categoryCard: {
@@ -1105,65 +1421,95 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: Colors.border,
-    padding: 14,
-    marginBottom: 10,
+    padding: 16,
+    marginBottom: 12,
   },
   catHeaderTouch: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 10,
   },
   catHeaderLeft: {
     flex: 1,
-    marginRight: 8,
+    marginRight: 10,
   },
   catName: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
     color: Colors.textPrimary,
     marginBottom: 2,
   },
   catRatio: {
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.textSecondary,
   },
   catProgressBar: {
-    height: 6,
-    borderRadius: 3,
+    height: 5,
+    borderRadius: 2.5,
     backgroundColor: Colors.surfaceLight,
     overflow: "hidden",
   },
   catProgressFill: {
     height: "100%",
-    borderRadius: 3,
+    borderRadius: 2.5,
   },
   catTaskList: {
     marginTop: 12,
-    paddingTop: 10,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-    gap: 8,
+    gap: 10,
   },
   catTaskItem: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 4,
+    gap: 10,
+    paddingVertical: 2,
+  },
+  catTaskTitleWrap: {
+    flex: 1,
   },
   catTaskTitle: {
     fontSize: 13,
     color: Colors.textPrimary,
     fontWeight: "500",
-    flex: 1,
   },
   catTaskTitleDone: {
     textDecorationLine: "line-through",
     color: Colors.textSecondary,
   },
+  catSubtaskMeta: {
+    fontSize: 10,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
   catTaskTime: {
     fontSize: 11,
     color: Colors.primary,
     fontWeight: "600",
+  },
+  categoryEmptyCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20,
+    gap: 8,
+  },
+  categoryEmptyTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: Colors.textPrimary,
+  },
+  categoryEmptySubtitle: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textAlign: "center",
+    maxWidth: 240,
+    lineHeight: 17,
   },
 });

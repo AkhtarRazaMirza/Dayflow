@@ -164,7 +164,18 @@ const WatchWidget = () => {
             {"All tasks completed! Great work today."}
           </Text>
         </View>
-      ) : null}
+      ) : (
+        <View style={styles.allDoneStrip}>
+          <Ionicons
+            name="sparkles-outline"
+            size={14}
+            color={Colors.primary}
+          />
+          <Text style={[styles.allDoneText, { color: Colors.textSecondary }]}>
+            {"Ready for a productive day! Add a task below."}
+          </Text>
+        </View>
+      )}
 
       {/* Bottom Progress Bar & Summary */}
       <View style={styles.progressSection}>
@@ -189,7 +200,9 @@ const WatchWidget = () => {
             </View>
           </View>
           <Text style={styles.progressStat}>
-            {completedCount}/{totalCount} ({progressPercent}%)
+            {totalCount > 0
+              ? `${completedCount}/${totalCount} (${progressPercent}%)`
+              : "0 tasks"}
           </Text>
         </View>
 

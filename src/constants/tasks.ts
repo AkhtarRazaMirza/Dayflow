@@ -7,6 +7,12 @@ export type TaskIcon = {
   backgroundColor: string;
 };
 
+export type SubTask = {
+  id: string;
+  title: string;
+  completed: boolean;
+};
+
 export type Task = {
   id: string;
   category: string;
@@ -14,55 +20,55 @@ export type Task = {
   time: string;
   status: TaskStatus;
   icon: TaskIcon;
-  date?: string;
+  date?: string; // YYYY-MM-DD
   deadline?: string;
   createdAt?: number;
   priority?: TaskPriority;
   notes?: string;
+  subtasks?: SubTask[];
+  estimatedDuration?: string;
 };
 
-export const TASKS: Task[] = [
+export const getTodayKey = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const getTomorrowKey = (): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const DEFAULT_TASKS: Task[] = [
   {
-    id: "1",
-    category: "Grocery shopping app design",
-    title: "Market Research",
-    time: "10:00 AM",
-    deadline: "10:00 AM",
-    status: "Done",
-    priority: "High",
-    icon: { name: "grid", backgroundColor: "#FF6B8A" },
-  },
-  {
-    id: "2",
-    category: "Grocery shopping app design",
-    title: "Competitive Analysis",
-    time: "12:00 PM",
-    deadline: "12:00 PM",
-    status: "In Progress",
-    priority: "High",
-    icon: { name: "grid", backgroundColor: "#FF6B8A" },
-  },
-  {
-    id: "3",
-    category: "Uber Eats redesign challenge",
-    title: "Create Low-fidelity Wireframe",
-    time: "07:00 PM",
-    deadline: "07:00 PM",
+    id: "welcome-task",
+    category: "Get Started",
+    title: "Welcome to Dayflow 👋",
+    time: "09:00 AM",
+    deadline: "09:00 AM",
     status: "To-do",
-    priority: "Medium",
-    icon: { name: "arrow-down-circle", backgroundColor: "#4ADE80" },
-  },
-  {
-    id: "4",
-    category: "About design sprint",
-    title: "How to pitch a Design Sprint",
-    time: "09:00 PM",
-    deadline: "09:00 PM",
-    status: "To-do",
-    priority: "Low",
-    icon: { name: "bookmark", backgroundColor: "#FBBF24" },
+    priority: "High",
+    icon: { name: "sparkles", backgroundColor: "#F59E0B" },
+    date: getTodayKey(),
+    estimatedDuration: "15m",
+    notes:
+      "Welcome to Dayflow! Tap this task card to inspect subtasks, start a Pomodoro focus session, or edit details. Use the + tab below to schedule new tasks.",
+    subtasks: [
+      { id: "w1", title: "Tap to explore task details & subtasks", completed: false },
+      { id: "w2", title: "Launch a Pomodoro focus timer session", completed: false },
+      { id: "w3", title: "Tap the + button to create your custom task", completed: false },
+    ],
   },
 ];
+
+export const TASKS: Task[] = DEFAULT_TASKS;
 
 export const FILTER_OPTIONS = [
   "All",

@@ -74,7 +74,14 @@ const FILTER_TABS: ("All" | TaskStatus)[] = [
 const TasksScreen = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { tasks, toggleTaskStatus, updateTaskStatus, deleteTask } = useTasks();
+  const {
+    tasks,
+    toggleTaskStatus,
+    updateTaskStatus,
+    deleteTask,
+    toggleSubtask,
+    startFocusSession,
+  } = useTasks();
 
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"All" | TaskStatus>("All");
@@ -83,6 +90,11 @@ const TasksScreen = () => {
   const [sortModalVisible, setSortModalVisible] = useState(false);
   const [detailTask, setDetailTask] = useState<Task | null>(null);
   const [now, setNow] = useState(() => new Date());
+
+  const currentDetailTask = useMemo(() => {
+    if (!detailTask) return null;
+    return tasks.find((t) => t.id === detailTask.id) || detailTask;
+  }, [tasks, detailTask]);
 
   // Realtime countdown ticker
   useEffect(() => {
@@ -520,15 +532,76 @@ const TasksScreen = () => {
                   </Text>
                 ) : null}
 
-                {/* Footer Row: Time + Status Badge */}
+                {/* Subtasks Progress Strip */}
+                {item.subtasks && item.subtasks.length > 0 && (
+                  <View style={styles.subtasksStrip}>
+                    <View style={styles.subtasksHeaderRow}>
+                      <View style={styles.subtasksLabelWrap}>
+                        <Ionicons
+                          name="checkbox-outline"
+                          size={11}
+                          color={Colors.textSecondary}
+                        />
+                        <Text style={styles.subtasksCountText}>
+                          {item.subtasks.filter((s) => s.completed).length}/
+                          {item.subtasks.length} subtasks
+                        </Text>
+                      </View>
+                      <Text style={styles.subtasksPercentText}>
+                        {Math.round(
+                          (item.subtasks.filter((s) => s.completed).length /
+                            item.subtasks.length) *
+                            100
+                        )}
+                        %
+                      </Text>
+                    </View>
+                    <View style={styles.subtasksTrack}>
+                      <View
+                        style={[
+                          styles.subtasksFill,
+                          {
+                            width: `${Math.round(
+                              (item.subtasks.filter((s) => s.completed).length /
+                                item.subtasks.length) *
+                                100
+                            )}%`,
+                            backgroundColor: item.subtasks.every(
+                              (s) => s.completed
+                            )
+                              ? Colors.statusDone
+                              : Colors.primary,
+                          },
+                        ]}
+                      />
+                    </View>
+                  </View>
+                )}
+
+                {/* Footer Row: Time + Duration + Status Badge */}
                 <View style={styles.footerRow}>
-                  <View style={styles.timeRow}>
-                    <Ionicons
-                      name="time-outline"
-                      size={13}
-                      color={Colors.primary}
-                    />
-                    <Text style={styles.time}>{item.time}</Text>
+                  <View style={styles.footerLeftMeta}>
+                    <View style={styles.timeRow}>
+                      <Ionicons
+                        name="time-outline"
+                        size={13}
+                        color={Colors.primary}
+                      />
+                      <Text style={styles.time}>{item.time}</Text>
+                    </View>
+
+                    {item.estimatedDuration && (
+                      <View style={styles.durationPill}>
+                        <Ionicons
+                          name="hourglass-outline"
+                          size={10}
+                          color={Colors.textSecondary}
+                        />
+                        <Text style={styles.durationText}>
+                          {item.estimatedDuration}
+                        </Text>
+                      </View>
+                    )}
                   </View>
 
                   <View
@@ -677,9 +750,9 @@ const TasksScreen = () => {
       </Modal>
 
       {/* Task Details & Action Bottom Modal */}
-      {detailTask && (
+      {currentDetailTask && (
         <Modal
-          visible={!!detailTask}
+          visible={!!currentDetailTask}
           transparent
           animationType="fade"
           onRequestClose={() => setDetailTask(null)}
@@ -696,7 +769,7 @@ const TasksScreen = () => {
               <View style={styles.detailHeader}>
                 <View style={styles.detailCategoryPill}>
                   <Text style={styles.detailCategoryText}>
-                    {detailTask.category}
+                    {currentDetailTask.category}
                   </Text>
                 </View>
 
@@ -713,16 +786,62 @@ const TasksScreen = () => {
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.detailTitle}>{detailTask.title}</Text>
+              <Text style={styles.detailTitle}>{currentDetailTask.title}</Text>
 
-              {detailTask.notes ? (
+              {currentDetailTask.notes ? (
                 <View style={styles.detailNotesCard}>
                   <Text style={styles.detailNotesLabel}>Notes</Text>
                   <Text style={styles.detailNotesText}>
-                    {detailTask.notes}
+                    {currentDetailTask.notes}
                   </Text>
                 </View>
               ) : null}
+
+              {/* Subtasks Section */}
+              {currentDetailTask.subtasks &&
+                currentDetailTask.subtasks.length > 0 && (
+                  <View style={styles.subtasksCard}>
+                    <Text style={styles.subtasksCardLabel}>
+                      SUBTASKS (
+                      {
+                        currentDetailTask.subtasks.filter((s) => s.completed)
+                          .length
+                      }
+                      /{currentDetailTask.subtasks.length})
+                    </Text>
+                    <View style={styles.subtasksItemsList}>
+                      {currentDetailTask.subtasks.map((st) => (
+                        <TouchableOpacity
+                          key={st.id}
+                          style={styles.subtaskItemRow}
+                          onPress={() =>
+                            toggleSubtask(currentDetailTask.id, st.id)
+                          }
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons
+                            name={st.completed ? "checkbox" : "square-outline"}
+                            size={18}
+                            color={
+                              st.completed
+                                ? Colors.statusDone
+                                : Colors.textSecondary
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.subtaskItemText,
+                              st.completed && styles.subtaskItemTextCompleted,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {st.title}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                )}
 
               {/* Meta Grid */}
               <View style={styles.detailMetaGrid}>
@@ -733,7 +852,9 @@ const TasksScreen = () => {
                     color={Colors.primary}
                   />
                   <Text style={styles.detailMetaLabel}>Time</Text>
-                  <Text style={styles.detailMetaVal}>{detailTask.time}</Text>
+                  <Text style={styles.detailMetaVal}>
+                    {currentDetailTask.time}
+                  </Text>
                 </View>
 
                 <View style={styles.detailMetaBox}>
@@ -744,36 +865,47 @@ const TasksScreen = () => {
                   />
                   <Text style={styles.detailMetaLabel}>Deadline</Text>
                   <Text style={styles.detailMetaVal}>
-                    {detailTask.deadline || detailTask.time}
+                    {currentDetailTask.deadline || currentDetailTask.time}
                   </Text>
                 </View>
 
-                {detailTask.priority && (
+                {currentDetailTask.estimatedDuration && (
                   <View style={styles.detailMetaBox}>
                     <Ionicons
-                      name={PRIORITY_META[detailTask.priority].icon}
+                      name="timer-outline"
                       size={16}
-                      color={PRIORITY_META[detailTask.priority].color}
+                      color={Colors.statusTodo}
                     />
-                    <Text style={styles.detailMetaLabel}>Priority</Text>
-                    <Text
-                      style={[
-                        styles.detailMetaVal,
-                        { color: PRIORITY_META[detailTask.priority].color },
-                      ]}
-                    >
-                      {detailTask.priority}
+                    <Text style={styles.detailMetaLabel}>Estimate</Text>
+                    <Text style={styles.detailMetaVal}>
+                      {currentDetailTask.estimatedDuration}
                     </Text>
                   </View>
                 )}
               </View>
+
+              {/* Focus Button */}
+              <TouchableOpacity
+                style={styles.detailFocusBtn}
+                onPress={() => {
+                  startFocusSession(currentDetailTask.id, 25);
+                  setDetailTask(null);
+                  router.push("/");
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="flame" size={16} color="#FFFFFF" />
+                <Text style={styles.detailFocusBtnText}>
+                  Start 25m Focus Session
+                </Text>
+              </TouchableOpacity>
 
               {/* Status Switcher Buttons */}
               <Text style={styles.statusSwitchLabel}>Update Status</Text>
               <View style={styles.statusSwitchRow}>
                 {(["To-do", "In Progress", "Done"] as TaskStatus[]).map(
                   (s) => {
-                    const isSelected = detailTask.status === s;
+                    const isSelected = currentDetailTask.status === s;
                     return (
                       <TouchableOpacity
                         key={s}
@@ -782,10 +914,7 @@ const TasksScreen = () => {
                           isSelected && styles.statusSwitchPillActive,
                         ]}
                         onPress={() => {
-                          updateTaskStatus(detailTask.id, s);
-                          setDetailTask((prev) =>
-                            prev ? { ...prev, status: s } : null
-                          );
+                          updateTaskStatus(currentDetailTask.id, s);
                         }}
                         activeOpacity={0.7}
                       >
@@ -807,7 +936,7 @@ const TasksScreen = () => {
               <View style={styles.detailActionButtons}>
                 <TouchableOpacity
                   style={styles.detailDeleteBtn}
-                  onPress={() => handleDelete(detailTask)}
+                  onPress={() => handleDelete(currentDetailTask)}
                   activeOpacity={0.7}
                 >
                   <Ionicons name="trash-outline" size={16} color="#EF4444" />
@@ -1139,12 +1268,69 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginBottom: 8,
   },
+  subtasksStrip: {
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    marginBottom: 8,
+  },
+  subtasksHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  subtasksLabelWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  subtasksCountText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: Colors.textSecondary,
+  },
+  subtasksPercentText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: Colors.primary,
+  },
+  subtasksTrack: {
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    overflow: "hidden",
+  },
+  subtasksFill: {
+    height: "100%",
+    borderRadius: 1.5,
+  },
   footerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 10,
     marginTop: 4,
+  },
+  footerLeftMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  durationPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: Colors.surfaceLight,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  durationText: {
+    fontSize: 10,
+    color: Colors.textSecondary,
+    fontWeight: "600",
   },
   timeRow: {
     flexDirection: "row",
@@ -1359,6 +1545,51 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textPrimary,
     lineHeight: 18,
+  },
+  subtasksCard: {
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  subtasksCardLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Colors.textSecondary,
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  subtasksItemsList: {
+    gap: 8,
+  },
+  subtaskItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  subtaskItemText: {
+    fontSize: 13,
+    color: Colors.textPrimary,
+    flex: 1,
+  },
+  subtaskItemTextCompleted: {
+    textDecorationLine: "line-through",
+    color: Colors.textSecondary,
+  },
+  detailFocusBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  detailFocusBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#FFFFFF",
   },
   detailMetaGrid: {
     flexDirection: "row",

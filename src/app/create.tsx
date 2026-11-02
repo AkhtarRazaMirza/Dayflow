@@ -1,5 +1,5 @@
 import Colors from "@/constants/Colors";
-import { TaskIcon, TaskPriority, TaskStatus } from "@/constants/tasks";
+import { SubTask, TaskIcon, TaskPriority, TaskStatus } from "@/constants/tasks";
 import { useTasks } from "@/context/TaskContext";
 import { getDeadlineProgress } from "@/utils/deadline";
 import { Ionicons } from "@expo/vector-icons";
@@ -33,45 +33,66 @@ const ICON_OPTIONS: TaskIcon[] = [
 ];
 
 const PRESET_CATEGORIES = [
-  "Grocery shopping app design",
-  "Uber Eats redesign challenge",
-  "About design sprint",
-  "Product Architecture",
-  "Design Review",
+  "Work",
+  "Personal",
+  "Design",
+  "Development",
+  "Health",
+  "Study",
 ];
 
 const QUICK_TEMPLATES = [
   {
-    title: "Design System Audit",
-    category: "Grocery shopping app design",
-    time: "11:00 AM",
-    deadline: "01:00 PM",
+    title: "Weekly Planning & Team Sync",
+    category: "Work",
+    time: "10:00 AM",
+    deadline: "11:00 AM",
     priority: "High" as TaskPriority,
-    icon: ICON_OPTIONS[0],
+    duration: "1h",
+    icon: ICON_OPTIONS[7],
+    subtasks: [
+      { id: "1", title: "Review top objectives for the week", completed: false },
+      { id: "2", title: "Sync with stakeholders & align dates", completed: false },
+    ],
   },
   {
-    title: "User Flow Wireframing",
-    category: "Uber Eats redesign challenge",
+    title: "Deep Work Focus Block",
+    category: "Development",
     time: "02:00 PM",
-    deadline: "05:00 PM",
+    deadline: "04:00 PM",
     priority: "High" as TaskPriority,
-    icon: ICON_OPTIONS[1],
-  },
-  {
-    title: "Sprint Retrospective Notes",
-    category: "About design sprint",
-    time: "04:30 PM",
-    deadline: "06:30 PM",
-    priority: "Medium" as TaskPriority,
-    icon: ICON_OPTIONS[2],
-  },
-  {
-    title: "Component Architecture Review",
-    category: "Product Architecture",
-    time: "06:00 PM",
-    deadline: "08:00 PM",
-    priority: "Medium" as TaskPriority,
+    duration: "2h",
     icon: ICON_OPTIONS[6],
+    subtasks: [
+      { id: "1", title: "Mute non-essential notifications", completed: false },
+      { id: "2", title: "Execute core feature implementation", completed: false },
+    ],
+  },
+  {
+    title: "UI / UX Design Polish",
+    category: "Design",
+    time: "04:30 PM",
+    deadline: "05:30 PM",
+    priority: "Medium" as TaskPriority,
+    duration: "1h",
+    icon: ICON_OPTIONS[0],
+    subtasks: [
+      { id: "1", title: "Check typography hierarchy & margins", completed: false },
+      { id: "2", title: "Verify high contrast dark theme colors", completed: false },
+    ],
+  },
+  {
+    title: "Workout & Wellness Session",
+    category: "Health",
+    time: "06:30 PM",
+    deadline: "07:30 PM",
+    priority: "Low" as TaskPriority,
+    duration: "45m",
+    icon: ICON_OPTIONS[9],
+    subtasks: [
+      { id: "1", title: "Warm up & cardio exercise", completed: false },
+      { id: "2", title: "Core recovery stretching", completed: false },
+    ],
   },
 ];
 
@@ -84,6 +105,8 @@ const PRESET_TIMES = [
   "07:00 PM",
   "09:00 PM",
 ];
+
+const DURATION_PRESETS = ["15m", "30m", "45m", "1h", "1h 30m", "2h"];
 
 const STATUS_OPTIONS: TaskStatus[] = ["To-do", "In Progress", "Done"];
 
@@ -108,6 +131,29 @@ const PRIORITY_CONFIG: Record<
   },
 };
 
+const formatDateKey = (d: Date): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const generateDatePresets = () => {
+  const now = new Date();
+  const items = [];
+  for (let i = 0; i <= 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    const key = formatDateKey(d);
+    let label = "";
+    if (i === 0) label = "Today";
+    else if (i === 1) label = "Tomorrow";
+    else
+      label = `${d.toLocaleDateString("en-US", { weekday: "short" })}, ${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    items.push({ key, label });
+  }
+  return items;
+};
+
 const getRelativeTimeString = (hoursAhead: number): string => {
   const d = new Date();
   d.setHours(d.getHours() + hoursAhead);
@@ -123,14 +169,22 @@ const CreateTask = () => {
   const router = useRouter();
   const { addTask } = useTasks();
 
+  const datePresets = useMemo(() => generateDatePresets(), []);
+
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [category, setCategory] = useState(PRESET_CATEGORIES[0]);
+  const [selectedDate, setSelectedDate] = useState(datePresets[0].key);
   const [time, setTime] = useState(PRESET_TIMES[0]);
   const [deadline, setDeadline] = useState(PRESET_TIMES[2]);
   const [priority, setPriority] = useState<TaskPriority>("High");
   const [status, setStatus] = useState<TaskStatus>("To-do");
+  const [duration, setDuration] = useState("45m");
   const [selectedIcon, setSelectedIcon] = useState<TaskIcon>(ICON_OPTIONS[0]);
+
+  // Subtasks list state
+  const [subtasks, setSubtasks] = useState<SubTask[]>([]);
+  const [subtaskInput, setSubtaskInput] = useState("");
 
   const [previewCreatedTime] = useState(() => Date.now() - 45 * 60 * 1000);
 
@@ -140,18 +194,39 @@ const CreateTask = () => {
     setTime(tpl.time);
     setDeadline(tpl.deadline);
     setPriority(tpl.priority);
+    setDuration(tpl.duration);
     setSelectedIcon(tpl.icon);
+    setSubtasks(tpl.subtasks || []);
+  };
+
+  const handleAddSubtask = () => {
+    if (!subtaskInput.trim()) return;
+    const newSt: SubTask = {
+      id: Date.now().toString(),
+      title: subtaskInput.trim(),
+      completed: false,
+    };
+    setSubtasks((prev) => [...prev, newSt]);
+    setSubtaskInput("");
+  };
+
+  const handleRemoveSubtask = (id: string) => {
+    setSubtasks((prev) => prev.filter((st) => st.id !== id));
   };
 
   const handleReset = () => {
     setTitle("");
     setNotes("");
     setCategory(PRESET_CATEGORIES[0]);
+    setSelectedDate(datePresets[0].key);
     setTime(PRESET_TIMES[0]);
     setDeadline(PRESET_TIMES[2]);
     setPriority("High");
     setStatus("To-do");
+    setDuration("45m");
     setSelectedIcon(ICON_OPTIONS[0]);
+    setSubtasks([]);
+    setSubtaskInput("");
   };
 
   const handleCreate = () => {
@@ -170,13 +245,16 @@ const CreateTask = () => {
     addTask({
       title: title.trim(),
       category: category.trim(),
+      date: selectedDate,
       time,
       deadline: finalDeadline,
       createdAt: Date.now(),
       status,
       icon: selectedIcon,
       priority,
+      estimatedDuration: duration,
       notes: notes.trim() || undefined,
+      subtasks: subtasks.length > 0 ? subtasks : undefined,
     });
 
     handleReset();
@@ -189,14 +267,29 @@ const CreateTask = () => {
       id: "preview",
       title: title.trim() || "Task Title Preview",
       category: category.trim() || "Category Name",
+      date: selectedDate,
       time,
       deadline: deadline.trim() || time,
       createdAt: previewCreatedTime,
       status,
       icon: selectedIcon,
       priority,
+      estimatedDuration: duration,
+      subtasks,
     };
-  }, [title, category, time, deadline, status, selectedIcon, priority, previewCreatedTime]);
+  }, [
+    title,
+    category,
+    selectedDate,
+    time,
+    deadline,
+    status,
+    selectedIcon,
+    priority,
+    duration,
+    subtasks,
+    previewCreatedTime,
+  ]);
 
   const previewDeadline = useMemo(() => {
     return getDeadlineProgress(previewTask);
@@ -295,14 +388,44 @@ const CreateTask = () => {
               {previewTask.title}
             </Text>
 
-            <View style={styles.previewFooterRow}>
-              <View style={styles.timeRow}>
+            {notes ? (
+              <Text style={styles.previewNotes} numberOfLines={1}>
+                {notes}
+              </Text>
+            ) : null}
+
+            {subtasks.length > 0 && (
+              <View style={styles.previewSubtasksStrip}>
                 <Ionicons
-                  name="time-outline"
-                  size={13}
+                  name="checkbox-outline"
+                  size={11}
                   color={Colors.primary}
                 />
-                <Text style={styles.previewTime}>{previewTask.time}</Text>
+                <Text style={styles.previewSubtasksText}>
+                  {subtasks.length} subtask{subtasks.length === 1 ? "" : "s"} planned
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.previewFooterRow}>
+              <View style={styles.timeGroup}>
+                <View style={styles.timeRow}>
+                  <Ionicons
+                    name="time-outline"
+                    size={13}
+                    color={Colors.primary}
+                  />
+                  <Text style={styles.previewTime}>{previewTask.time}</Text>
+                </View>
+
+                <View style={styles.previewDurationPill}>
+                  <Ionicons
+                    name="hourglass-outline"
+                    size={10}
+                    color={Colors.textSecondary}
+                  />
+                  <Text style={styles.previewDurationText}>{duration}</Text>
+                </View>
               </View>
 
               <View style={styles.previewStatusPill}>
@@ -411,6 +534,94 @@ const CreateTask = () => {
           />
         </View>
 
+        {/* Scheduled Date Selector */}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Scheduled Date</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsRow}
+          >
+            {datePresets.map((dp) => {
+              const isSelected = selectedDate === dp.key;
+              return (
+                <TouchableOpacity
+                  key={dp.key}
+                  style={[styles.chip, isSelected && styles.chipSelected]}
+                  onPress={() => setSelectedDate(dp.key)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="calendar-outline"
+                    size={13}
+                    color={isSelected ? "#FFFFFF" : Colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.chipText,
+                      isSelected && styles.chipTextSelected,
+                    ]}
+                  >
+                    {dp.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        {/* Subtasks / Checklist Builder */}
+        <View style={styles.fieldGroup}>
+          <View style={styles.labelWithHintRow}>
+            <Text style={styles.label}>Subtasks & Deliverables</Text>
+            <Text style={styles.labelHint}>{subtasks.length} added</Text>
+          </View>
+
+          <View style={styles.subtaskInputRow}>
+            <TextInput
+              style={styles.subtaskTextInput}
+              placeholder="Add actionable subtask step..."
+              placeholderTextColor={Colors.textSecondary}
+              value={subtaskInput}
+              onChangeText={setSubtaskInput}
+              onSubmitEditing={handleAddSubtask}
+              returnKeyType="done"
+            />
+            <TouchableOpacity
+              style={styles.subtaskAddBtn}
+              onPress={handleAddSubtask}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="add" size={18} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+
+          {subtasks.length > 0 && (
+            <View style={styles.subtasksListContainer}>
+              {subtasks.map((st, idx) => (
+                <View key={st.id} style={styles.subtaskRow}>
+                  <View style={styles.subtaskRowLeft}>
+                    <Text style={styles.subtaskNumber}>{idx + 1}.</Text>
+                    <Text style={styles.subtaskTitle} numberOfLines={1}>
+                      {st.title}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => handleRemoveSubtask(st.id)}
+                    style={styles.subtaskDeleteBtn}
+                  >
+                    <Ionicons
+                      name="close-circle"
+                      size={16}
+                      color={Colors.textSecondary}
+                    />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+
         {/* Category Input & Quick Presets */}
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>Category</Text>
@@ -487,6 +698,42 @@ const CreateTask = () => {
               );
             })}
           </View>
+        </View>
+
+        {/* Estimated Duration Selector */}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Estimated Duration</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsRow}
+          >
+            {DURATION_PRESETS.map((d) => {
+              const isSelected = duration === d;
+              return (
+                <TouchableOpacity
+                  key={d}
+                  style={[styles.chip, isSelected && styles.chipSelected]}
+                  onPress={() => setDuration(d)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="hourglass-outline"
+                    size={13}
+                    color={isSelected ? "#FFFFFF" : Colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.chipText,
+                      isSelected && styles.chipTextSelected,
+                    ]}
+                  >
+                    {d}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         </View>
 
         {/* Scheduled Start Time Selector */}
@@ -705,10 +952,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 8,
   },
   previewLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "700",
     color: Colors.textSecondary,
     textTransform: "uppercase",
@@ -718,33 +965,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
-    backgroundColor: Colors.surfaceLight,
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 8,
+    borderRadius: 10,
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
   },
   livePulseDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: Colors.statusDone,
+    backgroundColor: Colors.primary,
   },
   liveText: {
     fontSize: 10,
     fontWeight: "700",
-    color: Colors.statusDone,
+    color: Colors.primary,
   },
   previewCard: {
     backgroundColor: Colors.surface,
     borderRadius: 18,
-    padding: 18,
+    padding: 16,
     borderWidth: 1,
     borderColor: Colors.border,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
   },
   previewTopRow: {
     flexDirection: "row",
@@ -764,7 +1006,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
-    maxWidth: "60%",
+    maxWidth: "55%",
   },
   previewCategoryText: {
     fontSize: 11,
@@ -774,19 +1016,19 @@ const styles = StyleSheet.create({
   priorityTag: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 7,
+    gap: 3,
+    paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 6,
   },
   priorityTagText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: "700",
   },
   previewIconBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -794,8 +1036,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: Colors.textPrimary,
-    marginBottom: 12,
+    marginBottom: 4,
     lineHeight: 22,
+  },
+  previewNotes: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginBottom: 8,
+  },
+  previewSubtasksStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: Colors.surfaceLight,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginBottom: 10,
+    alignSelf: "flex-start",
+  },
+  previewSubtasksText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: Colors.textSecondary,
   },
   previewFooterRow: {
     flexDirection: "row",
@@ -803,26 +1066,45 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
+  timeGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   timeRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
   },
   previewTime: {
     fontSize: 12,
     color: Colors.primary,
     fontWeight: "600",
   },
-  previewStatusPill: {
+  previewDurationPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
     backgroundColor: Colors.surfaceLight,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  previewDurationText: {
+    fontSize: 10,
+    color: Colors.textSecondary,
+    fontWeight: "600",
+  },
+  previewStatusPill: {
+    backgroundColor: "rgba(56, 189, 248, 0.12)",
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
   previewStatusText: {
-    fontSize: 11,
-    color: Colors.textSecondary,
-    fontWeight: "600",
+    fontSize: 10,
+    fontWeight: "700",
+    color: Colors.statusTodo,
   },
   previewDeadlineSection: {
     paddingTop: 10,
@@ -833,12 +1115,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 6,
+    marginBottom: 5,
   },
   previewDeadlineLeft: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
   },
   previewDeadlineLabel: {
     fontSize: 11,
@@ -850,20 +1132,20 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
   progressBarTrack: {
-    height: 5,
-    borderRadius: 2.5,
+    height: 4,
+    borderRadius: 2,
     backgroundColor: Colors.surfaceLight,
     overflow: "hidden",
   },
   progressBarFill: {
     height: "100%",
-    borderRadius: 2.5,
+    borderRadius: 2,
   },
   fieldGroup: {
-    marginBottom: 20,
+    marginBottom: 18,
   },
   sectionLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "700",
     color: Colors.textSecondary,
     marginBottom: 10,
@@ -872,18 +1154,17 @@ const styles = StyleSheet.create({
   },
   templateChipsRow: {
     gap: 8,
-    paddingBottom: 2,
   },
   templateChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   templateDot: {
     width: 8,
@@ -892,13 +1173,13 @@ const styles = StyleSheet.create({
   },
   templateText: {
     fontSize: 12,
-    color: Colors.textPrimary,
     fontWeight: "600",
+    color: Colors.textPrimary,
   },
   label: {
     fontSize: 13,
     fontWeight: "600",
-    color: Colors.textSecondary,
+    color: Colors.textPrimary,
     marginBottom: 8,
   },
   labelWithHintRow: {
@@ -909,8 +1190,7 @@ const styles = StyleSheet.create({
   },
   labelHint: {
     fontSize: 11,
-    color: Colors.primary,
-    fontWeight: "500",
+    color: Colors.textSecondary,
   },
   input: {
     backgroundColor: Colors.surface,
@@ -918,28 +1198,85 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
     color: Colors.textPrimary,
-    fontSize: 15,
+    fontSize: 14,
   },
   textArea: {
-    minHeight: 76,
-    paddingTop: 12,
+    minHeight: 70,
+  },
+  subtaskInputRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 8,
+  },
+  subtaskTextInput: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: Colors.textPrimary,
+    fontSize: 13,
+  },
+  subtaskAddBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  subtasksListContainer: {
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 10,
+    gap: 8,
+  },
+  subtaskRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 4,
+  },
+  subtaskRowLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flex: 1,
+    marginRight: 8,
+  },
+  subtaskNumber: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: Colors.primary,
+  },
+  subtaskTitle: {
+    fontSize: 13,
+    color: Colors.textPrimary,
+    flex: 1,
+  },
+  subtaskDeleteBtn: {
+    padding: 2,
   },
   chipsRow: {
     gap: 8,
-    paddingTop: 10,
+    marginTop: 8,
   },
   chip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
     backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
   chipSelected: {
     backgroundColor: Colors.primary,
@@ -947,16 +1284,16 @@ const styles = StyleSheet.create({
   },
   chipText: {
     fontSize: 12,
-    color: Colors.textSecondary,
     fontWeight: "500",
+    color: Colors.textSecondary,
   },
   chipTextSelected: {
     color: "#FFFFFF",
-    fontWeight: "600",
+    fontWeight: "700",
   },
   priorityRow: {
     flexDirection: "row",
-    gap: 10,
+    gap: 8,
   },
   priorityPill: {
     flex: 1,
@@ -964,41 +1301,43 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    paddingVertical: 12,
-    borderRadius: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
   },
   priorityPillText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
     color: Colors.textSecondary,
   },
   statusRow: {
     flexDirection: "row",
-    gap: 10,
+    gap: 8,
   },
   statusPill: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderRadius: 12,
     backgroundColor: Colors.surface,
     borderWidth: 1,
     borderColor: Colors.border,
-    alignItems: "center",
   },
   statusPillSelected: {
     backgroundColor: Colors.primary,
     borderColor: Colors.primary,
   },
   statusPillText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
     color: Colors.textSecondary,
   },
   statusPillTextSelected: {
     color: "#FFFFFF",
+    fontWeight: "700",
   },
   iconsGrid: {
     flexDirection: "row",
@@ -1008,7 +1347,7 @@ const styles = StyleSheet.create({
   iconOption: {
     width: 44,
     height: 44,
-    borderRadius: 14,
+    borderRadius: 12,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -1022,9 +1361,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
     backgroundColor: Colors.primary,
-    paddingVertical: 16,
     borderRadius: 16,
-    marginTop: 10,
+    paddingVertical: 16,
+    marginTop: 8,
     shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
@@ -1032,7 +1371,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   submitButtonText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
     color: "#FFFFFF",
   },

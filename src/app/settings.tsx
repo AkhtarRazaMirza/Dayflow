@@ -2,9 +2,10 @@ import Colors from "@/constants/Colors";
 import { TaskPriority } from "@/constants/tasks";
 import { useTasks } from "@/context/TaskContext";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -22,6 +23,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type DailyGoalOption = 3 | 5 | 8 | 10;
 type SortPreference = "Deadline" | "Priority" | "Newest";
+
+const SETTINGS_STORAGE_KEY = "@dayflow_user_settings_v1";
 
 const WORKSPACE_AVATARS = [
   { id: "sparkles", icon: "sparkles-outline", label: "Personal" },
@@ -56,6 +59,61 @@ const SettingsScreen = () => {
   const [dailyBriefingEnabled, setDailyBriefingEnabled] = useState(true);
   const [hapticsEnabled, setHapticsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(false);
+
+  // Load persisted user settings on mount
+  useEffect(() => {
+    let isMounted = true;
+    const loadSettings = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
+        if (stored && isMounted) {
+          const s = JSON.parse(stored);
+          if (s.workspaceName) {
+            setWorkspaceName(s.workspaceName);
+            setTempName(s.workspaceName);
+          }
+          if (s.userRole) {
+            setUserRole(s.userRole);
+            setTempRole(s.userRole);
+          }
+          if (s.selectedAvatar) {
+            setSelectedAvatar(s.selectedAvatar);
+            setTempAvatar(s.selectedAvatar);
+          }
+          if (s.dailyGoal) setDailyGoal(s.dailyGoal);
+          if (s.defaultPriority) setDefaultPriority(s.defaultPriority);
+          if (s.defaultSort) setDefaultSort(s.defaultSort);
+          if (s.notificationsEnabled !== undefined)
+            setNotificationsEnabled(s.notificationsEnabled);
+          if (s.dailyBriefingEnabled !== undefined)
+            setDailyBriefingEnabled(s.dailyBriefingEnabled);
+          if (s.hapticsEnabled !== undefined)
+            setHapticsEnabled(s.hapticsEnabled);
+          if (s.soundEnabled !== undefined) setSoundEnabled(s.soundEnabled);
+        }
+      } catch (err) {
+        console.warn("Failed to load settings from storage:", err);
+      }
+    };
+    loadSettings();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const persistSettings = async (updates: Record<string, any>) => {
+    try {
+      const current = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY);
+      const currentParsed = current ? JSON.parse(current) : {};
+      const updated = { ...currentParsed, ...updates };
+      await AsyncStorage.setItem(
+        SETTINGS_STORAGE_KEY,
+        JSON.stringify(updated)
+      );
+    } catch (err) {
+      console.warn("Failed to persist settings:", err);
+    }
+  };
 
   // Tips modal
   const [tipsModalVisible, setTipsModalVisible] = useState(false);
@@ -96,10 +154,18 @@ const SettingsScreen = () => {
       Alert.alert("Invalid Name", "Workspace name cannot be empty.");
       return;
     }
-    setWorkspaceName(tempName.trim());
-    setUserRole(tempRole.trim() || "Member");
-    setSelectedAvatar(tempAvatar);
+    const newName = tempName.trim();
+    const newRole = tempRole.trim() || "Member";
+    const newAvatar = tempAvatar;
+    setWorkspaceName(newName);
+    setUserRole(newRole);
+    setSelectedAvatar(newAvatar);
     setEditProfileVisible(false);
+    persistSettings({
+      workspaceName: newName,
+      userRole: newRole,
+      selectedAvatar: newAvatar,
+    });
     showToast("Workspace profile updated");
   };
 
@@ -366,6 +432,7 @@ const SettingsScreen = () => {
                   ]}
                   onPress={() => {
                     setDailyGoal(g);
+                    persistSettings({ dailyGoal: g });
                     showToast(`Daily target set to ${g} tasks`);
                   }}
                   activeOpacity={0.7}
@@ -441,6 +508,7 @@ const SettingsScreen = () => {
                   ]}
                   onPress={() => {
                     setDefaultPriority(p);
+                    persistSettings({ defaultPriority: p });
                     showToast(`Default priority set to ${p}`);
                   }}
                   activeOpacity={0.7}
@@ -489,6 +557,7 @@ const SettingsScreen = () => {
                   ]}
                   onPress={() => {
                     setDefaultSort(s);
+                    persistSettings({ defaultSort: s });
                     showToast(`Default sort set to ${s}`);
                   }}
                   activeOpacity={0.7}
@@ -528,6 +597,7 @@ const SettingsScreen = () => {
               value={notificationsEnabled}
               onValueChange={(val) => {
                 setNotificationsEnabled(val);
+                persistSettings({ notificationsEnabled: val });
                 showToast(val ? "Task reminders enabled" : "Task reminders disabled");
               }}
               trackColor={{ false: Colors.surfaceLight, true: Colors.primary }}
@@ -555,6 +625,7 @@ const SettingsScreen = () => {
               value={dailyBriefingEnabled}
               onValueChange={(val) => {
                 setDailyBriefingEnabled(val);
+                persistSettings({ dailyBriefingEnabled: val });
                 showToast(val ? "Morning briefing enabled" : "Morning briefing disabled");
               }}
               trackColor={{ false: Colors.surfaceLight, true: Colors.primary }}
@@ -582,6 +653,7 @@ const SettingsScreen = () => {
               value={hapticsEnabled}
               onValueChange={(val) => {
                 setHapticsEnabled(val);
+                persistSettings({ hapticsEnabled: val });
                 showToast(val ? "Haptics enabled" : "Haptics disabled");
               }}
               trackColor={{ false: Colors.surfaceLight, true: Colors.primary }}
@@ -609,6 +681,7 @@ const SettingsScreen = () => {
               value={soundEnabled}
               onValueChange={(val) => {
                 setSoundEnabled(val);
+                persistSettings({ soundEnabled: val });
                 showToast(val ? "Sound effects enabled" : "Sound effects disabled");
               }}
               trackColor={{ false: Colors.surfaceLight, true: Colors.primary }}
