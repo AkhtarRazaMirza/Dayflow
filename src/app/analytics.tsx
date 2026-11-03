@@ -36,17 +36,33 @@ const Analytics = () => {
 
   const todayKey = useMemo(() => formatDateKey(new Date()), []);
 
+  // 7-day date keys for current week (Mon to Sun)
+  const currentWeekDates = useMemo(() => {
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+
+    const dates = new Set<string>();
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      dates.add(formatDateKey(d));
+    }
+    return dates;
+  }, []);
+
   // Filter tasks based on selected timeframe
   const scopedTasks = useMemo(() => {
     if (timeframe === "Today") {
       return tasks.filter((t) => (t.date || todayKey) === todayKey);
     }
     if (timeframe === "This Week") {
-      // In this week: today or next 6 days
-      return tasks;
+      return tasks.filter((t) => currentWeekDates.has(t.date || todayKey));
     }
     return tasks;
-  }, [tasks, timeframe, todayKey]);
+  }, [tasks, timeframe, todayKey, currentWeekDates]);
 
   // Core metrics calculated from scoped tasks
   const total = scopedTasks.length;

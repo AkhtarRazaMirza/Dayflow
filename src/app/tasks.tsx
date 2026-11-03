@@ -1,7 +1,7 @@
 import Colors from "@/constants/Colors";
 import { Task, TaskPriority, TaskStatus } from "@/constants/tasks";
 import { useTasks } from "@/context/TaskContext";
-import { getDeadlineProgress } from "@/utils/deadline";
+import { getDeadlineProgress, getTaskDeadlineDate } from "@/utils/deadline";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -165,10 +165,12 @@ const TasksScreen = () => {
       if (sortBy === "Newest") {
         return (b.createdAt || 0) - (a.createdAt || 0);
       }
-      // Default: Deadline (Earliest first)
-      const progA = getDeadlineProgress(a, now);
-      const progB = getDeadlineProgress(b, now);
-      return progB.percent - progA.percent;
+      // Default: Deadline (Earliest / Most Urgent first, completed tasks last)
+      if (a.status === "Done" && b.status !== "Done") return 1;
+      if (b.status === "Done" && a.status !== "Done") return -1;
+      const deadlineA = getTaskDeadlineDate(a, now).getTime();
+      const deadlineB = getTaskDeadlineDate(b, now).getTime();
+      return deadlineA - deadlineB;
     });
 
     return result;

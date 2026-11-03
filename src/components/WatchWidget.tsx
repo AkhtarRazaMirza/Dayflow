@@ -43,16 +43,22 @@ const WatchWidget = () => {
     day: "numeric",
   });
 
-  // Task statistics
-  const totalCount = tasks.length;
-  const completedCount = tasks.filter((t) => t.status === "Done").length;
-  const inProgressCount = tasks.filter((t) => t.status === "In Progress").length;
-  const pendingCount = tasks.filter((t) => t.status === "To-do").length;
+  // Scope statistics and next task strictly to today's schedule
+  const year = time.getFullYear();
+  const month = String(time.getMonth() + 1).padStart(2, "0");
+  const day = String(time.getDate()).padStart(2, "0");
+  const todayKey = `${year}-${month}-${day}`;
+
+  const todayTasks = tasks.filter((t) => (t.date || todayKey) === todayKey);
+  const totalCount = todayTasks.length;
+  const completedCount = todayTasks.filter((t) => t.status === "Done").length;
+  const inProgressCount = todayTasks.filter((t) => t.status === "In Progress").length;
+  const pendingCount = todayTasks.filter((t) => t.status === "To-do").length;
   const progressRatio = totalCount > 0 ? completedCount / totalCount : 0;
   const progressPercent = Math.round(progressRatio * 100);
 
-  // Next active task
-  const nextTask = tasks.find(
+  // Next active task for today
+  const nextTask = todayTasks.find(
     (t) => t.status === "In Progress" || t.status === "To-do"
   );
 

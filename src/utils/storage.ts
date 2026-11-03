@@ -214,9 +214,16 @@ export async function restoreDataFromBackup(jsonString: string): Promise<{ tasks
     }
 
     const validTasks: Task[] = [];
+    const seenIds = new Set<string>();
     for (const item of rawTasks) {
       const task = sanitizeTask(item);
-      if (task) validTasks.push(task);
+      if (task) {
+        if (seenIds.has(task.id)) {
+          task.id = `${task.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        }
+        seenIds.add(task.id);
+        validTasks.push(task);
+      }
     }
 
     await saveTasksToStorage(validTasks);

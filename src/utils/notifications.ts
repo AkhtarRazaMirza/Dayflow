@@ -1,8 +1,11 @@
 import { Task } from "@/constants/tasks";
-import { parseTimeStringToDate } from "@/utils/deadline";
+import { getTaskDeadlineDate } from "@/utils/deadline";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Notifications from "expo-notifications";
 import { AndroidImportance } from "expo-notifications";
 import { Platform } from "react-native";
+
+export { getTaskDeadlineDate };
 
 // Configure how notifications should be handled when app is in the foreground
 Notifications.setNotificationHandler({
@@ -85,25 +88,6 @@ export async function requestNotificationPermissionsAsync(): Promise<boolean> {
 }
 
 /**
- * Helper to compute task deadline Date object
- */
-export function getTaskDeadlineDate(task: Task): Date | null {
-  const timeStr = task.deadline || task.time;
-  if (!timeStr) return null;
-
-  let baseDate = new Date();
-  if (task.date) {
-    // task.date is in YYYY-MM-DD
-    const parts = task.date.split("-").map((p) => parseInt(p, 10));
-    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
-      baseDate = new Date(parts[0], parts[1] - 1, parts[2]);
-    }
-  }
-
-  return parseTimeStringToDate(timeStr, baseDate);
-}
-
-/**
  * Schedules deadline reminders for a task:
  * 1. 15 minutes before deadline
  * 2. Exact time of deadline
@@ -118,6 +102,19 @@ export async function scheduleTaskNotificationsAsync(task: Task): Promise<void> 
 
     // Cancel existing scheduled notifications for this task to avoid duplicates
     await cancelTaskNotificationsAsync(task.id);
+
+    // Check if notifications are disabled in user settings
+    try {
+      const settingsRaw = await AsyncStorage.getItem("@dayflow_user_settings_v1");
+      if (settingsRaw) {
+        const settings = JSON.parse(settingsRaw);
+        if (settings.notificationsEnabled === false) {
+          return;
+        }
+      }
+    } catch {
+      // Proceed if settings read fails
+    }
 
     const deadlineDate = getTaskDeadlineDate(task);
     if (!deadlineDate) return;
@@ -188,13 +185,19 @@ export async function cancelTaskNotificationsAsync(taskId: string): Promise<void
 }
 
 /**
- * Cancels all scheduled notifications
+ * Cancels all scheduled task deadline notifications while preserving recurring daily morning briefing
  */
 export async function cancelAllTaskNotificationsAsync(): Promise<void> {
   try {
-    await Notifications.cancelAllScheduledNotificationsAsync();
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    for (const notif of scheduled) {
+      const type = notif.content.data?.type;
+      if (type === "task-advance-reminder" || type === "task-due-alert") {
+        await Notifications.cancelScheduledNotificationAsync(notif.identifier);
+      }
+    }
   } catch (error) {
-    console.warn("Failed to cancel all notifications:", error);
+    console.warn("Failed to cancel task notifications:", error);
   }
 }
 

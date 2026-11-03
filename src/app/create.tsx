@@ -181,6 +181,7 @@ const CreateTask = () => {
   const [status, setStatus] = useState<TaskStatus>("To-do");
   const [duration, setDuration] = useState("45m");
   const [selectedIcon, setSelectedIcon] = useState<TaskIcon>(ICON_OPTIONS[0]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Subtasks list state
   const [subtasks, setSubtasks] = useState<SubTask[]>([]);
@@ -229,7 +230,9 @@ const CreateTask = () => {
     setSubtaskInput("");
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
+    if (isSubmitting) return;
+
     if (!title.trim()) {
       Alert.alert("Missing Title", "Please enter a title for your task.");
       return;
@@ -240,25 +243,44 @@ const CreateTask = () => {
       return;
     }
 
-    const finalDeadline = deadline.trim() || time;
+    setIsSubmitting(true);
 
-    addTask({
-      title: title.trim(),
-      category: category.trim(),
-      date: selectedDate,
-      time,
-      deadline: finalDeadline,
-      createdAt: Date.now(),
-      status,
-      icon: selectedIcon,
-      priority,
-      estimatedDuration: duration,
-      notes: notes.trim() || undefined,
-      subtasks: subtasks.length > 0 ? subtasks : undefined,
-    });
+    try {
+      // Auto-include any pending typed subtask
+      const finalSubtasks = [...subtasks];
+      if (subtaskInput.trim()) {
+        finalSubtasks.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          title: subtaskInput.trim(),
+          completed: false,
+        });
+      }
 
-    handleReset();
-    router.push("/");
+      const finalDeadline = deadline.trim() || time;
+
+      await addTask({
+        title: title.trim(),
+        category: category.trim(),
+        date: selectedDate,
+        time,
+        deadline: finalDeadline,
+        createdAt: Date.now(),
+        status,
+        icon: selectedIcon,
+        priority,
+        estimatedDuration: duration,
+        notes: notes.trim() || undefined,
+        subtasks: finalSubtasks.length > 0 ? finalSubtasks : undefined,
+      });
+
+      handleReset();
+      router.push("/");
+    } catch (err) {
+      console.warn("Failed to create task:", err);
+      Alert.alert("Error", "Could not save task. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Realtime preview calculation
@@ -888,12 +910,15 @@ const CreateTask = () => {
 
         {/* Create Task Button */}
         <TouchableOpacity
-          style={styles.submitButton}
+          style={[styles.submitButton, isSubmitting && { opacity: 0.7 }]}
           onPress={handleCreate}
+          disabled={isSubmitting}
           activeOpacity={0.8}
         >
           <Ionicons name="checkmark-circle" size={22} color="#FFFFFF" />
-          <Text style={styles.submitButtonText}>Create Task</Text>
+          <Text style={styles.submitButtonText}>
+            {isSubmitting ? "Creating Task..." : "Create Task"}
+          </Text>
         </TouchableOpacity>
       </ScrollView>
     </KeyboardAvoidingView>

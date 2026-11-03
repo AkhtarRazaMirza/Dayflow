@@ -33,6 +33,28 @@ export type DeadlineProgress = {
 };
 
 /**
+ * Resolves the absolute Date object for a task's deadline, taking into account
+ * task.date ("YYYY-MM-DD") and task.deadline || task.time.
+ */
+export const getTaskDeadlineDate = (
+  task: Task,
+  fallbackBase: Date = new Date()
+): Date => {
+  const timeStr = task.deadline || task.time;
+  if (!timeStr) return new Date(fallbackBase);
+
+  let baseDate = new Date(fallbackBase);
+  if (task.date) {
+    const parts = task.date.split("-").map((p) => parseInt(p, 10));
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+      baseDate = new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+  }
+
+  return parseTimeStringToDate(timeStr, baseDate);
+};
+
+/**
  * Calculates realtime deadline progress and countdown text.
  */
 export const getDeadlineProgress = (
@@ -50,15 +72,14 @@ export const getDeadlineProgress = (
     };
   }
 
-  const deadlineStr = task.deadline || task.time;
-  const deadlineDate = parseTimeStringToDate(deadlineStr, now);
+  const deadlineDate = getTaskDeadlineDate(task, now);
 
   // If task has explicit createdAt timestamp, use it as start; otherwise default to 4 hours prior to deadline
   const startMs = task.createdAt
     ? Math.min(task.createdAt, deadlineDate.getTime() - 60000)
     : deadlineDate.getTime() - 4 * 60 * 60 * 1000;
 
-  const totalDuration = deadlineDate.getTime() - startMs;
+  const totalDuration = Math.max(60000, deadlineDate.getTime() - startMs);
   const currentElapsed = now.getTime() - startMs;
 
   const diffMs = deadlineDate.getTime() - now.getTime();
@@ -85,7 +106,11 @@ export const getDeadlineProgress = (
   const seconds = totalSeconds % 60;
 
   let label = "";
-  if (hours > 0) {
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    label = remHours > 0 ? `${days}d ${remHours}h left` : `${days}d left`;
+  } else if (hours > 0) {
     label = `${hours}h ${minutes}m left`;
   } else if (minutes > 0) {
     label = `${minutes}m ${seconds}s left`;

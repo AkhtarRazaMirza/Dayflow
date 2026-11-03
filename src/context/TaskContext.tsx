@@ -22,6 +22,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { AppState, AppStateStatus } from "react-native";
 
 type TaskContextType = {
   tasks: Task[];
@@ -59,6 +60,7 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
   const [focusInitialSeconds, setFocusInitialSeconds] = useState<number>(0);
   const [isFocusRunning, setIsFocusRunning] = useState<boolean>(false);
   const activeFocusTaskIdRef = useRef<string | null>(activeFocusTaskId);
+  const focusInitialSecondsRef = useRef<number>(focusInitialSeconds);
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -67,6 +69,10 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     activeFocusTaskIdRef.current = activeFocusTaskId;
   }, [activeFocusTaskId]);
+
+  useEffect(() => {
+    focusInitialSecondsRef.current = focusInitialSeconds;
+  }, [focusInitialSeconds]);
 
   // Load persisted tasks from mobile storage on initial mount
   const reloadTasks = useCallback(async () => {
@@ -150,10 +156,10 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
     };
   }, []);
 
-  // Focus ticker
+  // Focus ticker (starts when isFocusRunning is true, cleans up when stopped)
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
-    if (isFocusRunning && focusRemainingSeconds > 0) {
+    if (isFocusRunning) {
       interval = setInterval(() => {
         setFocusRemainingSeconds((prev) => {
           if (prev <= 1) {
@@ -170,7 +176,7 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
             saveFocusSessionToStorage({
               taskId: activeFocusTaskIdRef.current,
               remainingSeconds: next,
-              initialSeconds: focusInitialSeconds,
+              initialSeconds: focusInitialSecondsRef.current,
               isRunning: true,
               lastUpdated: Date.now(),
             });
@@ -182,7 +188,38 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isFocusRunning, focusRemainingSeconds, focusInitialSeconds]);
+  }, [isFocusRunning]);
+
+  // AppState listener: reconcile Pomodoro timer when app returns from background / lock
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", async (nextAppState: AppStateStatus) => {
+      if (nextAppState === "active") {
+        const saved = await loadFocusSessionFromStorage();
+        if (saved && saved.isRunning && saved.remainingSeconds > 0) {
+          const elapsed = Math.floor((Date.now() - saved.lastUpdated) / 1000);
+          const updatedRemaining = Math.max(0, saved.remainingSeconds - elapsed);
+          if (updatedRemaining === 0) {
+            setIsFocusRunning(false);
+            setFocusRemainingSeconds(0);
+            const targetTask = tasksRef.current.find((t) => t.id === saved.taskId);
+            sendFocusCompleteNotificationAsync(targetTask?.title);
+            saveFocusSessionToStorage(null);
+          } else {
+            setFocusRemainingSeconds(updatedRemaining);
+            saveFocusSessionToStorage({
+              ...saved,
+              remainingSeconds: updatedRemaining,
+              lastUpdated: Date.now(),
+            });
+          }
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   const startFocusSession = (taskId: string, durationMinutes: number = 25) => {
     const totalSecs = durationMinutes * 60;
