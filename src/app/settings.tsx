@@ -1,6 +1,14 @@
 import Colors from "@/constants/Colors";
 import { TaskPriority } from "@/constants/tasks";
 import { useTasks } from "@/context/TaskContext";
+import {
+  cancelAllTaskNotificationsAsync,
+  requestNotificationPermissionsAsync,
+  scheduleDailyMorningBriefingAsync,
+  scheduleTaskNotificationsAsync,
+  sendTestNotificationAsync,
+} from "@/utils/notifications";
+import { exportAllDataAsJSON, restoreDataFromBackup } from "@/utils/storage";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
@@ -9,6 +17,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -38,7 +47,7 @@ const WORKSPACE_AVATARS = [
 const SettingsScreen = () => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { tasks, updateTaskStatus, resetTasks, clearCompleted } = useTasks();
+  const { tasks, updateTaskStatus, resetTasks, clearCompleted, reloadTasks } = useTasks();
 
   // Profile / Workspace State
   const [workspaceName, setWorkspaceName] = useState("Personal Workspace");
@@ -117,6 +126,10 @@ const SettingsScreen = () => {
 
   // Tips modal
   const [tipsModalVisible, setTipsModalVisible] = useState(false);
+
+  // JSON Backup / Restore State
+  const [restoreModalVisible, setRestoreModalVisible] = useState(false);
+  const [backupJSONInput, setBackupJSONInput] = useState("");
 
   // Toast notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -201,6 +214,38 @@ const SettingsScreen = () => {
       showToast("Tasks summary exported");
     } catch {
       showToast("Export cancelled");
+    }
+  };
+
+  // Action: Export Full JSON Backup
+  const handleExportJSONBackup = async () => {
+    try {
+      const json = await exportAllDataAsJSON();
+      await Share.share({
+        message: json,
+        title: "Dayflow Backup JSON",
+      });
+      showToast("Full data backup exported");
+    } catch {
+      showToast("Backup export cancelled");
+    }
+  };
+
+  // Action: Restore From JSON Backup
+  const handlePerformRestore = async () => {
+    if (!backupJSONInput.trim()) {
+      Alert.alert("Missing Input", "Please paste valid Dayflow backup JSON text.");
+      return;
+    }
+
+    try {
+      const result = await restoreDataFromBackup(backupJSONInput.trim());
+      await reloadTasks();
+      setRestoreModalVisible(false);
+      setBackupJSONInput("");
+      showToast(`Restored ${result.count} tasks from local backup! 🎉`);
+    } catch (err: any) {
+      Alert.alert("Restore Failed", err?.message || "Invalid backup format.");
     }
   };
 
@@ -589,16 +634,38 @@ const SettingsScreen = () => {
               <View style={styles.textWrap}>
                 <Text style={styles.settingTitle}>Task Reminders</Text>
                 <Text style={styles.actionSubtitle}>
-                  Alert before upcoming deadlines
+                  Alerts 15m before and at deadline
                 </Text>
               </View>
             </View>
             <Switch
               value={notificationsEnabled}
-              onValueChange={(val) => {
-                setNotificationsEnabled(val);
-                persistSettings({ notificationsEnabled: val });
-                showToast(val ? "Task reminders enabled" : "Task reminders disabled");
+              onValueChange={async (val) => {
+                if (val) {
+                  const granted = await requestNotificationPermissionsAsync();
+                  if (!granted) {
+                    Alert.alert(
+                      "Permission Required",
+                      "Please enable notification permissions in your device settings to receive deadline alerts."
+                    );
+                    setNotificationsEnabled(false);
+                    return;
+                  }
+                  // Schedule for active tasks
+                  tasks.forEach((t) => {
+                    if (t.status !== "Done") {
+                      scheduleTaskNotificationsAsync(t);
+                    }
+                  });
+                  setNotificationsEnabled(true);
+                  persistSettings({ notificationsEnabled: true });
+                  showToast("Deadline notifications active");
+                } else {
+                  await cancelAllTaskNotificationsAsync();
+                  setNotificationsEnabled(false);
+                  persistSettings({ notificationsEnabled: false });
+                  showToast("Task reminders disabled");
+                }
               }}
               trackColor={{ false: Colors.surfaceLight, true: Colors.primary }}
               thumbColor="#FFFFFF"
@@ -623,10 +690,26 @@ const SettingsScreen = () => {
             </View>
             <Switch
               value={dailyBriefingEnabled}
-              onValueChange={(val) => {
-                setDailyBriefingEnabled(val);
-                persistSettings({ dailyBriefingEnabled: val });
-                showToast(val ? "Morning briefing enabled" : "Morning briefing disabled");
+              onValueChange={async (val) => {
+                if (val) {
+                  const granted = await requestNotificationPermissionsAsync();
+                  if (!granted) {
+                    Alert.alert(
+                      "Permission Required",
+                      "Please enable notification permissions in your device settings."
+                    );
+                    setDailyBriefingEnabled(false);
+                    return;
+                  }
+                  await scheduleDailyMorningBriefingAsync();
+                  setDailyBriefingEnabled(true);
+                  persistSettings({ dailyBriefingEnabled: true });
+                  showToast("Daily 09:00 AM briefing scheduled");
+                } else {
+                  setDailyBriefingEnabled(false);
+                  persistSettings({ dailyBriefingEnabled: false });
+                  showToast("Morning briefing disabled");
+                }
               }}
               trackColor={{ false: Colors.surfaceLight, true: Colors.primary }}
               thumbColor="#FFFFFF"
@@ -688,11 +771,123 @@ const SettingsScreen = () => {
               thumbColor="#FFFFFF"
             />
           </View>
+
+          <View style={styles.divider} />
+
+          {/* Test Notification Trigger */}
+          <TouchableOpacity
+            style={styles.actionRow}
+            onPress={async () => {
+              const success = await sendTestNotificationAsync();
+              if (success) {
+                showToast("Test notification sent! Check device tray.");
+              } else {
+                Alert.alert(
+                  "Permission Required",
+                  "Notifications could not be sent. Please enable permissions in system settings."
+                );
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={styles.settingLabelRow}>
+              <Ionicons
+                name="paper-plane-outline"
+                size={20}
+                color={Colors.primary}
+              />
+              <View style={styles.textWrap}>
+                <Text style={styles.settingTitle}>Send Test Notification</Text>
+                <Text style={styles.actionSubtitle}>
+                  Test immediate alert banner & sound
+                </Text>
+              </View>
+            </View>
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={Colors.textSecondary}
+            />
+          </TouchableOpacity>
         </View>
 
         {/* Task Management & Bulk Actions */}
-        <Text style={styles.sectionHeader}>Data & Actions</Text>
+        <Text style={styles.sectionHeader}>Data & Mobile Storage</Text>
+
+        {/* Mobile Storage Status Banner */}
+        <View style={styles.storageDiagnosticsBanner}>
+          <View style={styles.storageDiagnosticsHeader}>
+            <View style={styles.storageDiagnosticsLeft}>
+              <Ionicons name="phone-portrait-outline" size={17} color={Colors.statusDone} />
+              <Text style={styles.storageDiagnosticsTitle}>Local Mobile Storage</Text>
+            </View>
+            <View style={styles.storageStatusPill}>
+              <View style={styles.storageStatusDot} />
+              <Text style={styles.storageStatusText}>100% Offline</Text>
+            </View>
+          </View>
+          <Text style={styles.storageDiagnosticsDesc}>
+            All {tasks.length} tasks and preferences are stored exclusively on this device via AsyncStorage (SQLite / mobile files). No cloud database is used.
+          </Text>
+        </View>
+
         <View style={styles.sectionCard}>
+          {/* Export Full JSON Backup */}
+          <TouchableOpacity
+            style={styles.actionRow}
+            onPress={handleExportJSONBackup}
+            activeOpacity={0.7}
+          >
+            <View style={styles.settingLabelRow}>
+              <Ionicons
+                name="archive-outline"
+                size={20}
+                color={Colors.primary}
+              />
+              <View style={styles.textWrap}>
+                <Text style={styles.settingTitle}>Export JSON Backup</Text>
+                <Text style={styles.actionSubtitle}>
+                  Save complete backup of all tasks & settings
+                </Text>
+              </View>
+            </View>
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={Colors.textSecondary}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
+          {/* Restore From JSON Backup */}
+          <TouchableOpacity
+            style={styles.actionRow}
+            onPress={() => setRestoreModalVisible(true)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.settingLabelRow}>
+              <Ionicons
+                name="cloud-download-outline"
+                size={20}
+                color={Colors.statusTodo}
+              />
+              <View style={styles.textWrap}>
+                <Text style={styles.settingTitle}>Restore From JSON Backup</Text>
+                <Text style={styles.actionSubtitle}>
+                  Restore tasks from a saved JSON string
+                </Text>
+              </View>
+            </View>
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={Colors.textSecondary}
+            />
+          </TouchableOpacity>
+
+          <View style={styles.divider} />
+
           {/* Export Tasks Summary */}
           <TouchableOpacity
             style={styles.actionRow}
@@ -706,9 +901,9 @@ const SettingsScreen = () => {
                 color={Colors.primary}
               />
               <View style={styles.textWrap}>
-                <Text style={styles.settingTitle}>Export Tasks Summary</Text>
+                <Text style={styles.settingTitle}>Share Text Summary</Text>
                 <Text style={styles.actionSubtitle}>
-                  Share or backup your current task list
+                  Share formatted text of your current schedule
                 </Text>
               </View>
             </View>
@@ -1009,6 +1204,76 @@ const SettingsScreen = () => {
             >
               <Text style={styles.tipDoneText}>Got It</Text>
             </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Restore JSON Backup Modal */}
+      <Modal
+        visible={restoreModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRestoreModalVisible(false)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setRestoreModalVisible(false)}
+        >
+          <Pressable
+            style={styles.modalCard}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <View style={styles.modalHeader}>
+              <View style={styles.tipHeaderTitleRow}>
+                <Ionicons name="cloud-download-outline" size={20} color={Colors.statusTodo} />
+                <Text style={styles.modalTitle}>Restore Tasks Backup</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setRestoreModalVisible(false)}
+                style={styles.modalCloseBtn}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close" size={20} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.restoreDesc}>
+              Paste your exported Dayflow JSON backup below to restore your tasks directly into local device storage.
+            </Text>
+
+            <TextInput
+              style={styles.restoreInput}
+              placeholder="Paste exported backup JSON text here..."
+              placeholderTextColor={Colors.textSecondary}
+              value={backupJSONInput}
+              onChangeText={setBackupJSONInput}
+              multiline
+              numberOfLines={6}
+              textAlignVertical="top"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity
+                style={styles.modalCancelBtn}
+                onPress={() => {
+                  setRestoreModalVisible(false);
+                  setBackupJSONInput("");
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalRestoreConfirmBtn}
+                onPress={handlePerformRestore}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.modalRestoreConfirmText}>Restore Data</Text>
+              </TouchableOpacity>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1453,6 +1718,85 @@ const styles = StyleSheet.create({
   },
   tipDoneText: {
     fontSize: 14,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  storageDiagnosticsBanner: {
+    backgroundColor: Colors.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(74, 222, 128, 0.3)",
+    padding: 14,
+    marginBottom: 12,
+  },
+  storageDiagnosticsHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  storageDiagnosticsLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  storageDiagnosticsTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: Colors.textPrimary,
+  },
+  storageStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(74, 222, 128, 0.12)",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  storageStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Colors.statusDone,
+  },
+  storageStatusText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: Colors.statusDone,
+  },
+  storageDiagnosticsDesc: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    lineHeight: 17,
+  },
+  restoreDesc: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  restoreInput: {
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    color: Colors.textPrimary,
+    fontSize: 12,
+    padding: 12,
+    minHeight: 110,
+    marginBottom: 16,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+  },
+  modalRestoreConfirmBtn: {
+    flex: 1,
+    backgroundColor: Colors.statusTodo,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  modalRestoreConfirmText: {
+    fontSize: 13,
     fontWeight: "700",
     color: "#FFFFFF",
   },

@@ -1,13 +1,33 @@
 import Colors from "@/constants/Colors";
 import { TaskProvider } from "@/context/TaskContext";
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs } from "expo-router";
-import React from "react";
+import * as Notifications from "expo-notifications";
+import { Tabs, useRouter } from "expo-router";
+import React, { useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 function TabLayout() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+
+  // Handle incoming notification interaction / tap
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const data = response.notification.request.content.data;
+        if (data?.taskId) {
+          router.push("/tasks");
+        } else if (data?.type === "daily-morning-briefing") {
+          router.push("/");
+        }
+      }
+    );
+
+    return () => {
+      subscription.remove();
+    };
+  }, [router]);
 
   return (
     <Tabs

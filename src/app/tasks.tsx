@@ -7,6 +7,7 @@ import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -76,6 +77,7 @@ const TasksScreen = () => {
   const router = useRouter();
   const {
     tasks,
+    isLoaded,
     toggleTaskStatus,
     updateTaskStatus,
     deleteTask,
@@ -191,6 +193,16 @@ const TasksScreen = () => {
       ]
     );
   };
+
+  if (!isLoaded) {
+    return (
+      <View style={[styles.container, styles.loadingContainer, { paddingTop: insets.top }]}>
+        <StatusBar style="light" />
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Loading tasks from storage...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -965,6 +977,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  loadingContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  loadingText: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+    fontWeight: "600",
   },
   header: {
     flexDirection: "row",

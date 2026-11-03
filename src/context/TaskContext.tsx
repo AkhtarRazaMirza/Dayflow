@@ -1,26 +1,40 @@
 import { DEFAULT_TASKS, Task, TaskStatus } from "@/constants/tasks";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import {
+  cancelAllTaskNotificationsAsync,
+  cancelTaskNotificationsAsync,
+  scheduleTaskNotificationsAsync,
+  sendFocusCompleteNotificationAsync,
+  setupNotificationChannelsAsync,
+} from "@/utils/notifications";
+import {
+  loadFocusSessionFromStorage,
+  loadTasksFromStorage,
+  resetTasksInStorage,
+  saveFocusSessionToStorage,
+  saveTasksToStorage,
+} from "@/utils/storage";
 import React, {
   createContext,
   ReactNode,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
-
-const TASKS_STORAGE_KEY = "@dayflow_tasks_v1";
 
 type TaskContextType = {
   tasks: Task[];
   isLoaded: boolean;
-  addTask: (task: Omit<Task, "id">) => void;
-  updateTaskStatus: (id: string, status: TaskStatus) => void;
-  toggleTaskStatus: (id: string) => void;
-  editTask: (id: string, updates: Partial<Task>) => void;
-  toggleSubtask: (taskId: string, subtaskId: string) => void;
-  deleteTask: (id: string) => void;
-  resetTasks: () => void;
-  clearCompleted: () => void;
+  addTask: (task: Omit<Task, "id">) => Promise<void>;
+  updateTaskStatus: (id: string, status: TaskStatus) => Promise<void>;
+  toggleTaskStatus: (id: string) => Promise<void>;
+  editTask: (id: string, updates: Partial<Task>) => Promise<void>;
+  toggleSubtask: (taskId: string, subtaskId: string) => Promise<void>;
+  deleteTask: (id: string) => Promise<void>;
+  resetTasks: () => Promise<void>;
+  clearCompleted: () => Promise<void>;
+  reloadTasks: () => Promise<void>;
   // Focus Session State
   activeFocusTaskId: string | null;
   focusRemainingSeconds: number;
@@ -35,58 +49,106 @@ type TaskContextType = {
 const TaskContext = createContext<TaskContextType | undefined>(undefined);
 
 export const TaskProvider = ({ children }: { children: ReactNode }) => {
-  const [tasks, setTasks] = useState<Task[]>(DEFAULT_TASKS);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
+  const tasksRef = useRef<Task[]>(tasks);
 
   // Focus Pomodoro Session
   const [activeFocusTaskId, setActiveFocusTaskId] = useState<string | null>(null);
   const [focusRemainingSeconds, setFocusRemainingSeconds] = useState<number>(0);
   const [focusInitialSeconds, setFocusInitialSeconds] = useState<number>(0);
   const [isFocusRunning, setIsFocusRunning] = useState<boolean>(false);
+  const activeFocusTaskIdRef = useRef<string | null>(activeFocusTaskId);
 
-  // Load persisted tasks from AsyncStorage on mount
   useEffect(() => {
-    let isMounted = true;
-    const loadPersistedTasks = async () => {
-      try {
-        const stored = await AsyncStorage.getItem(TASKS_STORAGE_KEY);
-        if (!isMounted) return;
-        if (stored !== null) {
-          const parsed = JSON.parse(stored);
-          setTasks(Array.isArray(parsed) ? parsed : DEFAULT_TASKS);
-        } else {
-          setTasks(DEFAULT_TASKS);
-          await AsyncStorage.setItem(
-            TASKS_STORAGE_KEY,
-            JSON.stringify(DEFAULT_TASKS)
-          );
-        }
-      } catch (err) {
-        console.warn("Failed to load tasks from AsyncStorage:", err);
-        if (isMounted) setTasks(DEFAULT_TASKS);
-      } finally {
-        if (isMounted) setIsLoaded(true);
-      }
-    };
+    tasksRef.current = tasks;
+  }, [tasks]);
 
-    loadPersistedTasks();
-    return () => {
-      isMounted = false;
-    };
+  useEffect(() => {
+    activeFocusTaskIdRef.current = activeFocusTaskId;
+  }, [activeFocusTaskId]);
+
+  // Load persisted tasks from mobile storage on initial mount
+  const reloadTasks = useCallback(async () => {
+    try {
+      const loadedList = await loadTasksFromStorage();
+      if (loadedList !== null) {
+        setTasks(loadedList);
+        tasksRef.current = loadedList;
+      }
+    } catch (err) {
+      console.warn("Failed to reload tasks from storage:", err);
+    }
   }, []);
 
-  // Persist tasks whenever changed (only after initial load completes)
   useEffect(() => {
-    if (!isLoaded) return;
-    const persistTasks = async () => {
+    let ignore = false;
+
+    // Kick off notification channels in background (do not block storage read)
+    setupNotificationChannelsAsync().catch((err) => {
+      console.warn("Background notification channels setup error:", err);
+    });
+
+    const initStorage = async () => {
       try {
-        await AsyncStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+        const loadedList = await loadTasksFromStorage();
+        if (ignore) return;
+
+        if (loadedList !== null) {
+          setTasks(loadedList);
+          tasksRef.current = loadedList;
+
+          // Schedule notification alerts for all active tasks
+          loadedList.forEach((t) => {
+            if (t.status !== "Done") {
+              scheduleTaskNotificationsAsync(t);
+            }
+          });
+        } else {
+          // First install / blank storage — populate and persist default seed tasks
+          setTasks(DEFAULT_TASKS);
+          tasksRef.current = DEFAULT_TASKS;
+          await saveTasksToStorage(DEFAULT_TASKS);
+          DEFAULT_TASKS.forEach((t) => scheduleTaskNotificationsAsync(t));
+        }
+
+        // Restore persisted Pomodoro focus session if active
+        const savedSession = await loadFocusSessionFromStorage();
+        if (ignore) return;
+
+        if (savedSession && savedSession.remainingSeconds > 0) {
+          let updatedRemaining = savedSession.remainingSeconds;
+          if (savedSession.isRunning) {
+            const elapsedSecs = Math.floor((Date.now() - savedSession.lastUpdated) / 1000);
+            updatedRemaining = Math.max(0, savedSession.remainingSeconds - elapsedSecs);
+          }
+
+          if (updatedRemaining > 0) {
+            setActiveFocusTaskId(savedSession.taskId);
+            setFocusRemainingSeconds(updatedRemaining);
+            setFocusInitialSeconds(savedSession.initialSeconds);
+            setIsFocusRunning(savedSession.isRunning && updatedRemaining > 0);
+          }
+        }
       } catch (err) {
-        console.warn("Failed to persist tasks:", err);
+        if (!ignore) {
+          console.warn("Failed to load tasks from local storage:", err);
+          setTasks(DEFAULT_TASKS);
+          tasksRef.current = DEFAULT_TASKS;
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoaded(true);
+        }
       }
     };
-    persistTasks();
-  }, [tasks, isLoaded]);
+
+    initStorage();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   // Focus ticker
   useEffect(() => {
@@ -96,16 +158,31 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
         setFocusRemainingSeconds((prev) => {
           if (prev <= 1) {
             setIsFocusRunning(false);
+            const finishedTaskId = activeFocusTaskIdRef.current;
+            const targetTask = tasksRef.current.find((t) => t.id === finishedTaskId);
+            sendFocusCompleteNotificationAsync(targetTask?.title);
+            saveFocusSessionToStorage(null);
             return 0;
           }
-          return prev - 1;
+          const next = prev - 1;
+          // Periodically sync focus session to storage every 10 seconds
+          if (next % 10 === 0 && activeFocusTaskIdRef.current) {
+            saveFocusSessionToStorage({
+              taskId: activeFocusTaskIdRef.current,
+              remainingSeconds: next,
+              initialSeconds: focusInitialSeconds,
+              isRunning: true,
+              lastUpdated: Date.now(),
+            });
+          }
+          return next;
         });
       }, 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isFocusRunning, focusRemainingSeconds]);
+  }, [isFocusRunning, focusRemainingSeconds, focusInitialSeconds]);
 
   const startFocusSession = (taskId: string, durationMinutes: number = 25) => {
     const totalSecs = durationMinutes * 60;
@@ -114,23 +191,47 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
     setFocusInitialSeconds(totalSecs);
     setIsFocusRunning(true);
 
+    saveFocusSessionToStorage({
+      taskId,
+      remainingSeconds: totalSecs,
+      initialSeconds: totalSecs,
+      isRunning: true,
+      lastUpdated: Date.now(),
+    });
+
     // Also mark task as In Progress if it was To-do
-    setTasks((prev) =>
-      prev.map((t) =>
-        t.id === taskId && t.status === "To-do"
-          ? { ...t, status: "In Progress" }
-          : t
-      )
-    );
+    setTasks((prev) => {
+      const updated = prev.map((t) =>
+        t.id === taskId && t.status === "To-do" ? { ...t, status: "In Progress" as TaskStatus } : t
+      );
+      saveTasksToStorage(updated);
+      return updated;
+    });
   };
 
   const pauseFocusSession = () => {
     setIsFocusRunning(false);
+    if (activeFocusTaskId) {
+      saveFocusSessionToStorage({
+        taskId: activeFocusTaskId,
+        remainingSeconds: focusRemainingSeconds,
+        initialSeconds: focusInitialSeconds,
+        isRunning: false,
+        lastUpdated: Date.now(),
+      });
+    }
   };
 
   const resumeFocusSession = () => {
-    if (focusRemainingSeconds > 0) {
+    if (focusRemainingSeconds > 0 && activeFocusTaskId) {
       setIsFocusRunning(true);
+      saveFocusSessionToStorage({
+        taskId: activeFocusTaskId,
+        remainingSeconds: focusRemainingSeconds,
+        initialSeconds: focusInitialSeconds,
+        isRunning: true,
+        lastUpdated: Date.now(),
+      });
     }
   };
 
@@ -139,69 +240,114 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
     setActiveFocusTaskId(null);
     setFocusRemainingSeconds(0);
     setFocusInitialSeconds(0);
+    saveFocusSessionToStorage(null);
   };
 
-  const addTask = (taskData: Omit<Task, "id">) => {
+  // Mutating Action: Add Task
+  const addTask = async (taskData: Omit<Task, "id">) => {
     const newTask: Task = {
       ...taskData,
       id: Date.now().toString(),
     };
-    setTasks((prev) => [newTask, ...prev]);
+    const nextTasks = [newTask, ...tasksRef.current];
+    setTasks(nextTasks);
+    tasksRef.current = nextTasks;
+    await saveTasksToStorage(nextTasks);
+    scheduleTaskNotificationsAsync(newTask);
   };
 
-  const updateTaskStatus = (id: string, status: TaskStatus) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, status } : t))
-    );
+  // Mutating Action: Update Task Status
+  const updateTaskStatus = async (id: string, status: TaskStatus) => {
+    const nextTasks = tasksRef.current.map((t) => (t.id === id ? { ...t, status } : t));
+    setTasks(nextTasks);
+    tasksRef.current = nextTasks;
+    await saveTasksToStorage(nextTasks);
+
+    const target = nextTasks.find((t) => t.id === id);
+    if (target) {
+      scheduleTaskNotificationsAsync(target);
+    }
   };
 
-  const toggleTaskStatus = (id: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id !== id) return t;
-        const nextStatus: TaskStatus =
-          t.status === "To-do"
-            ? "In Progress"
-            : t.status === "In Progress"
-              ? "Done"
-              : "To-do";
-        return { ...t, status: nextStatus };
-      })
-    );
+  // Mutating Action: Toggle Task Status
+  const toggleTaskStatus = async (id: string) => {
+    const nextTasks = tasksRef.current.map((t) => {
+      if (t.id !== id) return t;
+      const nextStatus: TaskStatus =
+        t.status === "To-do"
+          ? "In Progress"
+          : t.status === "In Progress"
+            ? "Done"
+            : "To-do";
+      return { ...t, status: nextStatus };
+    });
+    setTasks(nextTasks);
+    tasksRef.current = nextTasks;
+    await saveTasksToStorage(nextTasks);
+
+    const target = nextTasks.find((t) => t.id === id);
+    if (target) {
+      scheduleTaskNotificationsAsync(target);
+    }
   };
 
-  const editTask = (id: string, updates: Partial<Task>) => {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, ...updates } : t))
-    );
+  // Mutating Action: Edit Task
+  const editTask = async (id: string, updates: Partial<Task>) => {
+    const nextTasks = tasksRef.current.map((t) => (t.id === id ? { ...t, ...updates } : t));
+    setTasks(nextTasks);
+    tasksRef.current = nextTasks;
+    await saveTasksToStorage(nextTasks);
+
+    const target = nextTasks.find((t) => t.id === id);
+    if (target) {
+      scheduleTaskNotificationsAsync(target);
+    }
   };
 
-  const toggleSubtask = (taskId: string, subtaskId: string) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id !== taskId || !t.subtasks) return t;
-        const updatedSubtasks = t.subtasks.map((st) =>
-          st.id === subtaskId ? { ...st, completed: !st.completed } : st
-        );
-        return { ...t, subtasks: updatedSubtasks };
-      })
-    );
+  // Mutating Action: Toggle Subtask
+  const toggleSubtask = async (taskId: string, subtaskId: string) => {
+    const nextTasks = tasksRef.current.map((t) => {
+      if (t.id !== taskId || !t.subtasks) return t;
+      const updatedSubtasks = t.subtasks.map((st) =>
+        st.id === subtaskId ? { ...st, completed: !st.completed } : st
+      );
+      return { ...t, subtasks: updatedSubtasks };
+    });
+    setTasks(nextTasks);
+    tasksRef.current = nextTasks;
+    await saveTasksToStorage(nextTasks);
   };
 
-  const deleteTask = (id: string) => {
+  // Mutating Action: Delete Task
+  const deleteTask = async (id: string) => {
     if (activeFocusTaskId === id) {
       stopFocusSession();
     }
-    setTasks((prev) => prev.filter((t) => t.id !== id));
+    cancelTaskNotificationsAsync(id);
+    const nextTasks = tasksRef.current.filter((t) => t.id !== id);
+    setTasks(nextTasks);
+    tasksRef.current = nextTasks;
+    await saveTasksToStorage(nextTasks);
   };
 
-  const resetTasks = () => {
+  // Mutating Action: Reset Tasks to Defaults
+  const resetTasks = async () => {
     stopFocusSession();
+    cancelAllTaskNotificationsAsync();
     setTasks(DEFAULT_TASKS);
+    tasksRef.current = DEFAULT_TASKS;
+    await resetTasksInStorage(DEFAULT_TASKS);
+    DEFAULT_TASKS.forEach((t) => scheduleTaskNotificationsAsync(t));
   };
 
-  const clearCompleted = () => {
-    setTasks((prev) => prev.filter((t) => t.status !== "Done"));
+  // Mutating Action: Clear Completed
+  const clearCompleted = async () => {
+    const completed = tasksRef.current.filter((t) => t.status === "Done");
+    completed.forEach((c) => cancelTaskNotificationsAsync(c.id));
+    const nextTasks = tasksRef.current.filter((t) => t.status !== "Done");
+    setTasks(nextTasks);
+    tasksRef.current = nextTasks;
+    await saveTasksToStorage(nextTasks);
   };
 
   return (
@@ -217,6 +363,7 @@ export const TaskProvider = ({ children }: { children: ReactNode }) => {
         deleteTask,
         resetTasks,
         clearCompleted,
+        reloadTasks,
         activeFocusTaskId,
         focusRemainingSeconds,
         focusInitialSeconds,
